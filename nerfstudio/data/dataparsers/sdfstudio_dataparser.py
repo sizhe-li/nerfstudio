@@ -92,8 +92,9 @@ class SDFStudio(DataParser):
 
             # append data
             image_filenames.append(image_filename)
-            if depth_filename is not None and normal_filename is not None:
+            if depth_filename is not None:
                 depth_filenames.append(self.config.data / depth_filename)
+            if normal_filename is not None:
                 normal_filenames.append(self.config.data / normal_filename)
             fx.append(intrinsics[0, 0])
             fy.append(intrinsics[1, 1])

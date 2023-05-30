@@ -41,6 +41,7 @@ from nerfstudio.model_components.losses import (
     MSELoss,
     ScaleAndShiftInvariantLoss,
     monosdf_normal_loss,
+    SensorDepthLoss,
 )
 from nerfstudio.model_components.ray_samplers import LinearDisparitySampler
 from nerfstudio.model_components.renderers import (
@@ -79,6 +80,14 @@ class SurfaceModelConfig(ModelConfig):
     """Monocular normal consistency loss multiplier."""
     mono_depth_loss_mult: float = 0.0
     """Monocular depth consistency loss multiplier."""
+    sensor_depth_truncation: float = 0.015
+    """Sensor depth trunction, default value is 0.015 which means 5cm with a rough scale value 0.3 (0.015 = 0.05 * 0.3)"""
+    sensor_depth_l1_loss_mult: float = 0.0
+    """Sensor depth L1 loss multiplier."""
+    sensor_depth_freespace_loss_mult: float = 0.0
+    """Sensor depth free space loss multiplier."""
+    sensor_depth_sdf_loss_mult: float = 0.0
+    """Sensor depth sdf loss multiplier."""
     sdf_field: SDFFieldConfig = SDFFieldConfig()
     """Config for SDF Field"""
     background_model: Literal["grid", "mlp", "none"] = "mlp"
@@ -164,6 +173,7 @@ class SurfaceModel(Model):
         self.rgb_loss = L1Loss()
         self.eikonal_loss = MSELoss()
         self.depth_loss = ScaleAndShiftInvariantLoss(alpha=0.5, scales=1)
+        self.sensor_depth_loss = SensorDepthLoss(truncation=self.config.sensor_depth_truncation)
 
         # metrics
         self.psnr = PeakSignalNoiseRatio(data_range=1.0)
@@ -325,6 +335,21 @@ class SurfaceModel(Model):
                     self.depth_loss(depth_pred.reshape(1, 32, -1), (depth_gt * 50 + 0.5).reshape(1, 32, -1), mask)
                     * self.config.mono_depth_loss_mult
                 )
+            
+            # sensor depth loss
+            if "depth_image" in batch and (
+                self.config.sensor_depth_l1_loss_mult > 0.0
+                or self.config.sensor_depth_freespace_loss_mult > 0.0
+                or self.config.sensor_depth_sdf_loss_mult > 0.0
+            ):
+                # import pdb; pdb.set_trace()
+
+                l1_loss, free_space_loss, sdf_loss = self.sensor_depth_loss(batch, outputs)
+
+                loss_dict["sensor_l1_loss"] = l1_loss * self.config.sensor_depth_l1_loss_mult
+                loss_dict["sensor_freespace_loss"] = free_space_loss * self.config.sensor_depth_freespace_loss_mult
+                loss_dict["sensor_sdf_loss"] = sdf_loss * self.config.sensor_depth_sdf_loss_mult
+
 
         return loss_dict
 
