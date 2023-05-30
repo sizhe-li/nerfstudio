@@ -22,15 +22,15 @@ from typing import TYPE_CHECKING, Any, Dict, Literal, Optional, Tuple, get_args
 
 import torch
 
-from nerfstudio.cameras.cameras import Cameras
 from nerfstudio.model_components.renderers import background_color_override_context
 from nerfstudio.utils import colormaps, writer
 from nerfstudio.utils.writer import GLOBAL_BUFFER, EventName, TimeWriter
 from nerfstudio.viewer.server import viewer_utils
-from nerfstudio.viewer.viser.messages import CameraMessage
+from nerfstudio.viewer_beta import utils
+from nerfstudio.viewer_beta.utils import CameraState, get_camera
 
 if TYPE_CHECKING:
-    from nerfstudio.viewer.server.viewer_state import ViewerState
+    from nerfstudio.viewer_beta.viewer import Viewer
 
 RenderStates = Literal["low_move", "low_static", "high"]
 RenderActions = Literal["rerender", "move", "static", "step"]
@@ -42,8 +42,8 @@ class RenderAction:
 
     action: RenderActions
     """The action to take """
-    cam_msg: CameraMessage
-    """The camera message to render"""
+    camera_state: CameraState
+    """The current camera state """
 
 
 class RenderStateMachine(threading.Thread):
@@ -54,7 +54,7 @@ class RenderStateMachine(threading.Thread):
         viewer: the viewer state
     """
 
-    def __init__(self, viewer: ViewerState):
+    def __init__(self, viewer: Viewer):
         threading.Thread.__init__(self)
         self.transitions: Dict[RenderStates, Dict[RenderActions, RenderStates]] = {
             s: {} for s in get_args(RenderStates)
@@ -98,7 +98,7 @@ class RenderStateMachine(threading.Thread):
             # never overwrite rerenders
             pass
         else:
-            #  minimal use case, just set the next action
+            #  monimal use case, just set the next action
             self.next_action = action
 
         # handle interrupt logic
@@ -106,24 +106,25 @@ class RenderStateMachine(threading.Thread):
             self.interrupt_render_flag = True
         self.render_trigger.set()
 
-    def _render_img(self, cam_msg: CameraMessage):
-        """Takes the current camera, generates rays, and renders the image
+    def _render_img(self, camera_state: CameraState):
+        """Takes the current camera, generates rays, and renders the iamge
 
         Args:
-            cam_msg: the camera message to render
+            camera_state: the current camera state
         """
 
         # initialize the camera ray bundle
-        viewer_utils.update_render_aabb(
+        utils.update_render_aabb(
             crop_viewport=self.viewer.control_panel.crop_viewport,
             crop_min=self.viewer.control_panel.crop_min,
             crop_max=self.viewer.control_panel.crop_max,
             model=self.viewer.get_model(),
         )
 
-        image_height, image_width = self._calculate_image_res(cam_msg.aspect)
+        image_height, image_width = self._calculate_image_res(camera_state.aspect)
 
-        camera: Optional[Cameras] = self.viewer.get_camera(image_height, image_width)
+        camera = get_camera(camera_state, image_height, image_width)
+        camera = camera.to(self.viewer.get_model().device)
         assert camera is not None, "render called before viewer connected"
 
         with self.viewer.train_lock if self.viewer.train_lock is not None else contextlib.nullcontext():
@@ -153,7 +154,6 @@ class RenderStateMachine(threading.Thread):
             writer.put_time(
                 name=EventName.VIS_RAYS_PER_SEC, duration=num_rays / render_time, step=step, avg_over_steps=True
             )
-        self.viewer.viser_server.send_status_message(eval_res=f"{image_height}x{image_width}px", step=step)
         return outputs
 
     def run(self):
@@ -170,14 +170,14 @@ class RenderStateMachine(threading.Thread):
             self.state = self.transitions[self.state][action.action]
             try:
                 with viewer_utils.SetTrace(self.check_interrupt):
-                    outputs = self._render_img(action.cam_msg)
+                    outputs = self._render_img(action.camera_state)
             except viewer_utils.IOChangeException:
                 # if we got interrupted, don't send the output to the viewer
                 continue
             self._send_output_to_viewer(outputs)
             # if we rendered a static low res, we need to self-trigger a static high-res
             if self.state == "low_static":
-                self.action(RenderAction("static", action.cam_msg))
+                self.action(RenderAction("static", action.camera_state))
 
     def check_interrupt(self, frame, event, arg):
         """Raises interrupt when flag has been set and not already on lowest resolution.
@@ -198,7 +198,6 @@ class RenderStateMachine(threading.Thread):
         output_keys = set(outputs.keys())
         if self.output_keys != output_keys:
             self.output_keys = output_keys
-            self.viewer.viser_server.send_output_options_message(list(outputs.keys()))
             self.viewer.control_panel.update_output_options(list(outputs.keys()))
 
         output_render = self.viewer.control_panel.output_render
@@ -230,15 +229,15 @@ class RenderStateMachine(threading.Thread):
 
         self.viewer.viser_server.set_background_image(
             selected_output.cpu().numpy(),
-            file_format=self.viewer.config.image_format,
-            quality=self.viewer.config.jpeg_quality,
+            format=self.viewer.config.image_format,
+            jpeg_quality=self.viewer.config.jpeg_quality,
         )
 
     def _calculate_image_res(self, aspect_ratio: float) -> Tuple[int, int]:
         """Calculate the maximum image height that can be rendered in the time budget
 
         Args:
-            aspect_ratio: the aspect ratio of the current view
+            apect_ratio: the aspect ratio of the current view
         Returns:
             image_height: the maximum image height that can be rendered in the time budget
             image_width: the maximum image width that can be rendered in the time budget

@@ -33,23 +33,16 @@ from rich.table import Table
 from torch.cuda.amp.grad_scaler import GradScaler
 
 from nerfstudio.configs.experiment_config import ExperimentConfig
-from nerfstudio.engine.callbacks import (
-    TrainingCallback,
-    TrainingCallbackAttributes,
-    TrainingCallbackLocation,
-)
+from nerfstudio.engine.callbacks import TrainingCallback, TrainingCallbackAttributes, TrainingCallbackLocation
 from nerfstudio.engine.optimizers import Optimizers
 from nerfstudio.pipelines.base_pipeline import VanillaPipeline
 from nerfstudio.utils import profiler, writer
-from nerfstudio.utils.decorators import (
-    check_eval_enabled,
-    check_main_thread,
-    check_viewer_enabled,
-)
+from nerfstudio.utils.decorators import check_eval_enabled, check_main_thread, check_viewer_enabled
 from nerfstudio.utils.misc import step_check
 from nerfstudio.utils.rich_utils import CONSOLE
 from nerfstudio.utils.writer import EventName, TimeWriter
 from nerfstudio.viewer.server.viewer_state import ViewerState
+from nerfstudio.viewer_beta.viewer import Viewer as ViewerBetaState
 
 TRAIN_INTERATION_OUTPUT = Tuple[torch.Tensor, Dict[str, torch.Tensor], Dict[str, torch.Tensor]]
 TORCH_DEVICE = str
@@ -118,7 +111,9 @@ class Trainer:
         self.config = config
         self.local_rank = local_rank
         self.world_size = world_size
-        self.device: TORCH_DEVICE = "cpu" if world_size == 0 else f"cuda:{local_rank}"
+        self.device: TORCH_DEVICE = config.machine.device_type
+        if self.device == "cuda":
+            self.device += f":{local_rank}"
         self.mixed_precision: bool = self.config.mixed_precision
         self.use_grad_scaler: bool = self.mixed_precision or self.config.use_grad_scaler
         self.training_state: Literal["training", "paused", "completed"] = "training"
@@ -147,7 +142,11 @@ class Trainer:
                 'inference': does not load any dataset into memory
         """
         self.pipeline = self.config.pipeline.setup(
-            device=self.device, test_mode=test_mode, world_size=self.world_size, local_rank=self.local_rank
+            device=self.device,
+            test_mode=test_mode,
+            world_size=self.world_size,
+            local_rank=self.local_rank,
+            grad_scaler=self.grad_scaler,
         )
         self.optimizers = self.setup_optimizers()
 
@@ -167,6 +166,16 @@ class Trainer:
                 train_lock=self.train_lock,
             )
             banner_messages = [f"Viewer at: {self.viewer_state.viewer_url}"]
+        if self.config.is_viewer_beta_enabled() and self.local_rank == 0:
+            self.viewer_state = ViewerBetaState(
+                self.config.viewer,
+                log_filename=viewer_log_path,
+                datapath=self.base_dir,
+                pipeline=self.pipeline,
+                trainer=self,
+                train_lock=self.train_lock,
+            )
+            banner_messages = [f"Viewer Beta at: {self.viewer_state.viewer_url}"]
         self._check_viewer_warnings()
 
         self._load_checkpoint()
@@ -297,6 +306,10 @@ class Trainer:
         table.add_row("Checkpoint Directory", str(self.checkpoint_dir))
         CONSOLE.print(Panel(table, title="[bold][green]:tada: Training Finished :tada:[/bold]", expand=False))
 
+        # after train end callbacks
+        for callback in self.callbacks:
+            callback.run_callback_at_location(step=step, location=TrainingCallbackLocation.AFTER_TRAIN)
+
         if not self.config.viewer.quit_on_train_completion:
             self._train_complete_viewer()
 
@@ -304,7 +317,7 @@ class Trainer:
     def _check_viewer_warnings(self) -> None:
         """Helper to print out any warnings regarding the way the viewer/loggers are enabled"""
         if (
-            self.config.is_viewer_enabled()
+            (self.config.is_viewer_enabled() or self.config.is_viewer_beta_enabled())
             and not self.config.is_tensorboard_enabled()
             and not self.config.is_wandb_enabled()
         ):
@@ -440,9 +453,10 @@ class Trainer:
         """
 
         self.optimizers.zero_grad_all()
-        cpu_or_cuda_str: str = self.device.split(":")[0]
 
-        with torch.autocast(device_type=cpu_or_cuda_str, enabled=self.mixed_precision):
+        device_type: str = self.device.split(":")[0] if "cuda" in self.device else "cpu"
+
+        with torch.autocast(device_type=device_type, enabled=self.mixed_precision):
             _, loss_dict, metrics_dict = self.pipeline.get_train_loss_dict(step=step)
             loss = functools.reduce(torch.add, loss_dict.values())
         self.grad_scaler.scale(loss).backward()  # type: ignore
