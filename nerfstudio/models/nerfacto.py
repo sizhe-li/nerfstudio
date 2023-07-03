@@ -292,10 +292,14 @@ class NerfactoModel(Model):
         depth = self.renderer_depth(weights=weights, ray_samples=ray_samples)
         accumulation = self.renderer_accumulation(weights=weights)
 
+        steps = (ray_samples.frustums.starts + ray_samples.frustums.ends) / 2
         outputs = {
             "rgb": rgb,
             "accumulation": accumulation,
             "depth": depth,
+            "weights": weights,
+            "steps": steps,
+
         }
 
         if self.config.predict_normals:
