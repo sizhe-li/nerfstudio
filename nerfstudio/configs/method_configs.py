@@ -561,6 +561,11 @@ method_configs['kplane-dynamic-big'] = TrainerConfig(
 
 method_configs["dnerf"] = TrainerConfig(
     method_name="dnerf",
+    steps_per_eval_batch=500,
+    steps_per_save=2000,
+    steps_per_eval_all_images=30000,
+    max_num_iterations=30001,
+    mixed_precision=True,
     pipeline=VanillaPipelineConfig(
         datamanager=VanillaDataManagerConfig(
             _target=DNeRFDataManager[DynamicDepthDataset],
