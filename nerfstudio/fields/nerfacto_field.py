@@ -91,6 +91,7 @@ class NerfactoField(Field):
         num_semantic_classes: int = 100,
         pass_semantic_gradients: bool = False,
         use_pred_normals: bool = False,
+        use_view_directions: bool = True,
         use_average_appearance_embedding: bool = False,
         spatial_distortion: Optional[SpatialDistortion] = None,
         implementation: Literal["tcnn", "torch"] = "tcnn",
@@ -112,13 +113,17 @@ class NerfactoField(Field):
         self.use_transient_embedding = use_transient_embedding
         self.use_semantics = use_semantics
         self.use_pred_normals = use_pred_normals
+        self.use_view_directions = use_view_directions
         self.pass_semantic_gradients = pass_semantic_gradients
         self.base_res = base_res
 
-        self.direction_encoding = SHEncoding(
-            levels=4,
-            implementation=implementation,
-        )
+        view_out_dim = 0
+        if self.use_view_directions:
+            self.direction_encoding = SHEncoding(
+                levels=4,
+                implementation=implementation,
+            )
+            view_out_dim = self.direction_encoding.get_out_dim()
 
         self.position_encoding = NeRFEncoding(
             in_dim=3, num_frequencies=2, min_freq_exp=0, max_freq_exp=2 - 1, implementation=implementation
@@ -189,7 +194,7 @@ class NerfactoField(Field):
             self.field_head_pred_normals = PredNormalsFieldHead(in_dim=self.mlp_pred_normals.get_out_dim())
 
         self.mlp_head = MLP(
-            in_dim=self.direction_encoding.get_out_dim() + self.geo_feat_dim + self.appearance_embedding_dim,
+            in_dim=view_out_dim + self.geo_feat_dim + self.appearance_embedding_dim,
             num_layers=num_layers_color,
             layer_width=hidden_dim_color,
             out_dim=3,
@@ -234,7 +239,10 @@ class NerfactoField(Field):
         camera_indices = ray_samples.camera_indices.squeeze()
         directions = shift_directions_for_tcnn(ray_samples.frustums.directions)
         directions_flat = directions.view(-1, 3)
-        d = self.direction_encoding(directions_flat)
+
+        d = torch.tensor([], device=directions.device)
+        if self.use_view_directions:
+            d = self.direction_encoding(directions_flat)
 
         outputs_shape = ray_samples.frustums.directions.shape[:-1]
 

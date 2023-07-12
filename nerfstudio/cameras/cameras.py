@@ -319,6 +319,7 @@ class Cameras(TensorDataclass):
         keep_shape: Optional[bool] = None,
         disable_distortion: bool = False,
         aabb_box: Optional[SceneBox] = None,
+        times: Optional[Union[Float[Tensor, "*num_rays 1"], float]] = None,
     ) -> RayBundle:
         """Generates rays for the given camera indices.
 
@@ -393,6 +394,10 @@ class Cameras(TensorDataclass):
                 len(cameras.shape) == 1
             ), "camera_indices must be a tensor if cameras are batched with more than 1 batch dimension"
             camera_indices = torch.tensor([camera_indices], device=cameras.device)
+        
+        if times is not None and isinstance(times, float):
+            times = torch.tensor([times], device=cameras.device)
+            
 
         assert camera_indices.shape[-1] == len(
             cameras.shape
@@ -444,6 +449,9 @@ class Cameras(TensorDataclass):
         # If camera indices was an int or coords was none, we need to broadcast our indices along batch dims
         camera_indices = camera_indices.broadcast_to(coords.shape[:-1] + (len(cameras.shape),)).to(torch.long)
 
+        if times is not None:
+            times = times.broadcast_to(coords.shape[:-1] + (1,)).to(torch.float32)
+
         # Checking our tensors have been standardized
         assert isinstance(coords, torch.Tensor) and isinstance(camera_indices, torch.Tensor)
         assert camera_indices.shape[-1] == len(cameras.shape)
@@ -454,7 +462,8 @@ class Cameras(TensorDataclass):
         # raybundle.shape == (num_rays) when done
 
         raybundle = cameras._generate_rays_from_coords(
-            camera_indices, coords, camera_opt_to_camera, distortion_params_delta, disable_distortion=disable_distortion
+            camera_indices, coords, camera_opt_to_camera, distortion_params_delta, 
+            disable_distortion=disable_distortion, times=times
         )
 
         # If we have mandated that we don't keep the shape, then we flatten
@@ -494,6 +503,7 @@ class Cameras(TensorDataclass):
         camera_opt_to_camera: Optional[Float[Tensor, "*num_rays 3 4"]] = None,
         distortion_params_delta: Optional[Float[Tensor, "*num_rays 6"]] = None,
         disable_distortion: bool = False,
+        times: Optional[Float[Tensor, "*num_rays 1"]] = None,
     ) -> RayBundle:
         """Generates rays for the given camera indices and coords where self isn't jagged
 
@@ -786,7 +796,9 @@ class Cameras(TensorDataclass):
         pixel_area = (dx * dy)[..., None]  # ("num_rays":..., 1)
         assert pixel_area.shape == num_rays_shape + (1,)
 
-        times = self.times[camera_indices, 0] if self.times is not None else None
+        # if user did not provide times, use the default times if they exist
+        if times is None:
+            times = self.times[camera_indices, 0] if self.times is not None else None
 
         metadata = (
             self._apply_fn_to_dict(self.metadata, lambda x: x[true_indices]) if self.metadata is not None else None
@@ -796,7 +808,10 @@ class Cameras(TensorDataclass):
         else:
             metadata = {"directions_norm": directions_norm[0].detach()}
 
-        times = self.times[camera_indices, 0] if self.times is not None else None
+        # print('camera_indices.shape', camera_indices.shape)
+        # print('true_indices.shape', true_indices[0].shape)
+        # print('fx.shape', fx.shape, 'self.fx.shape', self.fx.shape)
+        # print('times.shape', times.shape)
 
         return RayBundle(
             origins=origins,
@@ -821,9 +836,10 @@ class Cameras(TensorDataclass):
             A JSON representation of the camera
         """
         flattened = self.flatten()
-        times = flattened[camera_idx].times
-        if times is not None:
-            times = times.item()
+        # import pdb; pdb.set_trace()
+        # times = flattened[camera_idx].times
+        # if times is not None:
+        #     times = times.item()
         json_ = {
             "type": "PinholeCamera",
             "cx": flattened[camera_idx].cx.item(),
@@ -832,7 +848,7 @@ class Cameras(TensorDataclass):
             "fy": flattened[camera_idx].fy.item(),
             "camera_to_world": self.camera_to_worlds[camera_idx].tolist(),
             "camera_index": camera_idx,
-            "times": times,
+            # "times": times,
         }
         if image is not None:
             image_uint8 = (image * 255).detach().type(torch.uint8)

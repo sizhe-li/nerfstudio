@@ -120,7 +120,7 @@ class SurfaceModel(Model):
         self.field = self.config.sdf_field.setup(
             aabb=self.scene_box.aabb,
             spatial_distortion=self.scene_contraction,
-            num_images=self.num_train_data,
+            num_images=self.num_images,
             use_average_appearance_embedding=self.config.use_average_appearance_embedding,
         )
 
@@ -136,7 +136,7 @@ class SurfaceModel(Model):
             self.field_background = NerfactoField(
                 self.scene_box.aabb,
                 spatial_distortion=self.scene_contraction,
-                num_images=self.num_train_data,
+                num_images=self.num_images,
                 use_average_appearance_embedding=self.config.use_average_appearance_embedding,
             )
         elif self.config.background_model == "mlp":

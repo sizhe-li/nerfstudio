@@ -258,7 +258,7 @@ class VanillaPipeline(Pipeline):
 
         self._model = config.model.setup(
             scene_box=self.datamanager.train_dataset.scene_box,
-            num_train_data=len(self.datamanager.train_dataset),
+            num_train_data=len(self.datamanager.train_dataset.cameras),
             metadata=self.datamanager.train_dataset.metadata,
             device=device,
             grad_scaler=grad_scaler,

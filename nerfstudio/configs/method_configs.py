@@ -29,6 +29,7 @@ from nerfstudio.configs.external_methods import get_external_methods
 
 from nerfstudio.data.datamanagers.random_cameras_datamanager import RandomCamerasDataManagerConfig
 from nerfstudio.data.datamanagers.base_datamanager import VanillaDataManager, VanillaDataManagerConfig
+from nerfstudio.data.datamanagers.dnerf_datamanager import DNeRFDataManager
 
 from nerfstudio.data.dataparsers.blender_dataparser import BlenderDataParserConfig
 from nerfstudio.data.dataparsers.dnerf_dataparser import DNeRFDataParserConfig
@@ -38,6 +39,9 @@ from nerfstudio.data.dataparsers.phototourism_dataparser import PhototourismData
 from nerfstudio.data.dataparsers.sdfstudio_dataparser import SDFStudioDataParserConfig
 from nerfstudio.data.dataparsers.sitcoms3d_dataparser import Sitcoms3DDataParserConfig
 from nerfstudio.data.datasets.depth_dataset import DepthDataset
+from nerfstudio.data.datasets.dnerf_dataset import DynamicDepthDataset, DynamicDataset
+
+
 from nerfstudio.data.datasets.sdf_dataset import SDFDataset
 from nerfstudio.data.datasets.semantic_dataset import SemanticDataset
 from nerfstudio.engine.optimizers import AdamOptimizerConfig, RAdamOptimizerConfig
@@ -54,6 +58,11 @@ from nerfstudio.models.generfacto import GenerfactoModelConfig
 from nerfstudio.models.instant_ngp import InstantNGPModelConfig
 from nerfstudio.models.mipnerf import MipNerfModel
 from nerfstudio.models.nerfacto import NerfactoModelConfig
+from nerfstudio.models.dnerfacto import DNerfactoModelConfig
+from nerfstudio.models.depth_dnerfacto import DepthDNerfactoModelConfig
+from nerfstudio.models.depth_kplanes import DepthKPlanesModelConfig
+from kplanes.kplanes_configs import KPlanesModelConfig
+
 from nerfstudio.models.neus import NeuSModelConfig
 from nerfstudio.models.neus_facto import NeuSFactoModelConfig
 from nerfstudio.models.semantic_nerfw import SemanticNerfWModelConfig
@@ -62,6 +71,7 @@ from nerfstudio.models.vanilla_nerf import NeRFModel, VanillaModelConfig
 from nerfstudio.pipelines.base_pipeline import VanillaPipelineConfig
 from nerfstudio.pipelines.dynamic_batch import DynamicBatchPipelineConfig
 from nerfstudio.plugins.registry import discover_methods
+
 
 method_configs: Dict[str, TrainerConfig] = {}
 descriptions = {
@@ -79,6 +89,7 @@ descriptions = {
     "generfacto": "Generative Text to NeRF model",
     "neus": "Implementation of NeuS. (slow)",
     "neus-facto": "Implementation of NeuS-Facto. (slow)",
+    "kplane-dynamic": "Implementation of KPlanes-Dynamic.",
 }
 
 method_configs["nerfacto"] = TrainerConfig(
@@ -430,26 +441,162 @@ method_configs["tensorf"] = TrainerConfig(
     vis="viewer",
 )
 
+method_configs['kplane-dynamic'] = TrainerConfig(
+        method_name="kplane-dynamic",
+        steps_per_eval_batch=500,
+        steps_per_save=2000,
+        steps_per_eval_all_images=30000,
+        max_num_iterations=30001,
+        mixed_precision=True,
+        pipeline=VanillaPipelineConfig(
+            datamanager=VanillaDataManagerConfig(
+                _target=DNeRFDataManager[DynamicDepthDataset],
+                dataparser=DNeRFDataParserConfig(center_method="focus", scale_factor=1.0),
+                train_num_rays_per_batch=4096,
+                eval_num_rays_per_batch=4096,
+                camera_optimizer=CameraOptimizerConfig(
+                    mode="SO3xR3", optimizer=AdamOptimizerConfig(lr=6e-4, eps=1e-8, weight_decay=1e-2)
+                ),
+                # dataparser=DNeRFDataParserConfig(),
+                # train_num_rays_per_batch=4096,
+                # eval_num_rays_per_batch=4096,
+                # camera_res_scale_factor=0.5,  # DNeRF train on 400x400
+            ),
+            model=DepthKPlanesModelConfig(
+                eval_num_rays_per_chunk=1 << 15,
+                grid_base_resolution=[128, 128, 128, 5],  # time-resolution should be half the time-steps
+                grid_feature_dim=32,
+                multiscale_res=[1, 2, 4],
+                proposal_net_args_list=[
+                    # time-resolution should be half the time-steps
+                    {"num_output_coords": 8, "resolution": [128, 128, 128, 5]},
+                    {"num_output_coords": 8, "resolution": [256, 256, 256, 5]},
+                ],
+                loss_coefficients={
+                    "interlevel": 1.0,
+                    "distortion": 0.01,
+                    "plane_tv": 0.1,
+                    "plane_tv_proposal_net": 0.0001,
+                    "l1_time_planes": 0.001,
+                    "l1_time_planes_proposal_net": 0.0001,
+                    "time_smoothness": 0.1,
+                    "time_smoothness_proposal_net": 0.001,
+                },
+            ),
+        ),
+        optimizers={
+            "proposal_networks": {
+                "optimizer": AdamOptimizerConfig(lr=1e-2, eps=1e-12),
+                "scheduler": CosineDecaySchedulerConfig(warm_up_end=512, max_steps=30000),
+            },
+            "fields": {
+                "optimizer": AdamOptimizerConfig(lr=1e-2, eps=1e-12),
+                "scheduler": CosineDecaySchedulerConfig(warm_up_end=512, max_steps=30000),
+            },
+        },
+        viewer=ViewerConfig(num_rays_per_chunk=1 << 15),
+        vis="viewer",
+    )
+
+method_configs['kplane-dynamic-big'] = TrainerConfig(
+        method_name="kplane-dynamic-big",
+        steps_per_eval_batch=500,
+        steps_per_save=2000,
+        steps_per_eval_all_images=30000,
+        max_num_iterations=30001,
+        mixed_precision=True,
+        pipeline=VanillaPipelineConfig(
+            datamanager=VanillaDataManagerConfig(
+                _target=DNeRFDataManager[DynamicDepthDataset],
+                dataparser=DNeRFDataParserConfig(center_method="focus", scale_factor=1.0),
+                train_num_rays_per_batch=4096,
+                eval_num_rays_per_batch=4096,
+                camera_optimizer=CameraOptimizerConfig(
+                    mode="SO3xR3", optimizer=AdamOptimizerConfig(lr=6e-4, eps=1e-8, weight_decay=1e-2)
+                ),
+                # dataparser=DNeRFDataParserConfig(),
+                # train_num_rays_per_batch=4096,
+                # eval_num_rays_per_batch=4096,
+                # camera_res_scale_factor=0.5,  # DNeRF train on 400x400
+            ),
+            model=DepthKPlanesModelConfig(
+                eval_num_rays_per_chunk=1 << 15,
+                num_samples=64,
+                num_proposal_samples=(256, 128),
+
+                grid_base_resolution=[128, 128, 128, 5],  # time-resolution should be half the time-steps
+                grid_feature_dim=64,
+
+                multiscale_res=[1, 2, 4],
+                proposal_net_args_list=[
+                    # time-resolution should be half the time-steps
+                    {"num_output_coords": 8, "resolution": [128, 128, 128, 5]},
+                    {"num_output_coords": 8, "resolution": [256, 256, 256, 5]},
+                ],
+                loss_coefficients={
+                    "interlevel": 1.0,
+                    "distortion": 0.01,
+                    "plane_tv": 0.1,
+                    "plane_tv_proposal_net": 0.0001,
+                    "l1_time_planes": 0.001,
+                    "l1_time_planes_proposal_net": 0.0001,
+                    "time_smoothness": 0.1,
+                    "time_smoothness_proposal_net": 0.001,
+                },
+            ),
+        ),
+        optimizers={
+            "proposal_networks": {
+                "optimizer": AdamOptimizerConfig(lr=1e-2, eps=1e-12),
+                "scheduler": CosineDecaySchedulerConfig(warm_up_end=512, max_steps=30000),
+            },
+            "fields": {
+                "optimizer": AdamOptimizerConfig(lr=1e-2, eps=1e-12),
+                "scheduler": CosineDecaySchedulerConfig(warm_up_end=512, max_steps=30000),
+            },
+        },
+        viewer=ViewerConfig(num_rays_per_chunk=1 << 15),
+        vis="viewer",
+    )
+
 method_configs["dnerf"] = TrainerConfig(
     method_name="dnerf",
     pipeline=VanillaPipelineConfig(
-        datamanager=VanillaDataManagerConfig(dataparser=DNeRFDataParserConfig()),
-        model=VanillaModelConfig(
-            _target=NeRFModel,
+        datamanager=VanillaDataManagerConfig(
+            _target=DNeRFDataManager[DynamicDepthDataset],
+            dataparser=DNeRFDataParserConfig(center_method="focus"),
+            # dataparser=NerfstudioDataParserConfig(),
+            train_num_rays_per_batch=4096,
+            eval_num_rays_per_batch=4096,
+            camera_optimizer=CameraOptimizerConfig(
+                mode="SO3xR3", optimizer=AdamOptimizerConfig(lr=6e-4, eps=1e-8, weight_decay=1e-2)
+            ),
+        ),
+
+        model=DepthDNerfactoModelConfig(
+            # _target=NeRFModel,
+            eval_num_rays_per_chunk=1 << 15,
             enable_temporal_distortion=True,
             temporal_distortion_params={"kind": TemporalDistortionKind.DNERF},
         ),
     ),
+
     optimizers={
+        "proposal_networks": {
+            "optimizer": AdamOptimizerConfig(lr=1e-2, eps=1e-15),
+            "scheduler": None,
+        },
         "fields": {
-            "optimizer": RAdamOptimizerConfig(lr=5e-4, eps=1e-08),
+            "optimizer": AdamOptimizerConfig(lr=1e-2, eps=1e-15),
             "scheduler": None,
         },
         "temporal_distortion": {
-            "optimizer": RAdamOptimizerConfig(lr=5e-4, eps=1e-08),
+            "optimizer": RAdamOptimizerConfig(lr=1e-3, eps=1e-08),
             "scheduler": None,
         },
     },
+    viewer=ViewerConfig(num_rays_per_chunk=1 << 15),
+    vis="viewer",
 )
 
 method_configs["phototourism"] = TrainerConfig(

@@ -165,11 +165,21 @@ def get_path_from_json(camera_path: Dict[str, Any]) -> Cameras:
             fxs.append(focal_length)
             fys.append(focal_length)
 
-    # Iff ALL cameras in the path have a "time" value, construct Cameras with times
-    if all("render_time" in camera for camera in camera_path["camera_path"]):
-        times = torch.tensor([camera["render_time"] for camera in camera_path["camera_path"]])
-    else:
-        times = None
+    # # Iff ALL cameras in the path have a "time" value, construct Cameras with times
+    # if all("render_time" in camera for camera in camera_path["camera_path"]):
+    #     times = torch.tensor([camera["render_time"] for camera in camera_path["camera_path"]])
+    # else:
+    #     times = None
+
+
+    num_steps = len(camera_path["camera_path"])
+    num_chunks = 4
+    # divde the time trajectory into num_chunks, each chunk goes from 0 to 1 or 1 to 0
+    times = []
+    for _ in range(num_chunks):
+        times.append(torch.linspace(0, 1, num_steps // (2 * num_chunks))[:, None])
+        times.append(torch.linspace(1, 0, num_steps // (2 * num_chunks))[:, None])
+    times = torch.cat(times, dim=0)
 
     camera_to_worlds = torch.stack(c2ws, dim=0)
     fx = torch.tensor(fxs)

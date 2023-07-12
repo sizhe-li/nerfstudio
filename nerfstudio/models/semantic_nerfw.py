@@ -96,7 +96,7 @@ class SemanticNerfWModel(Model):
             max_res=self.config.max_res,
             log2_hashmap_size=self.config.log2_hashmap_size,
             spatial_distortion=scene_contraction,
-            num_images=self.num_train_data,
+            num_images=self.num_images,
             use_average_appearance_embedding=self.config.use_average_appearance_embedding,
             use_transient_embedding=self.config.use_transient_embedding,
             use_semantics=True,
