@@ -72,6 +72,7 @@ from nerfstudio.utils.misc import get_orig_class
 
 from nerfstudio.data.dataparsers.dnerf_dataparser import DNeRFDataParserOutputs
 
+
 def variable_res_collate(batch: List[Dict]) -> Dict:
     """Default collate function for the cached dataloader.
     Args:
@@ -172,6 +173,7 @@ class DataManager(nn.Module):
     train_sampler: Optional[DistributedSampler] = None
     eval_sampler: Optional[DistributedSampler] = None
     includes_time: bool = False
+    sample_idx_enabled: bool = False
 
     def __init__(self):
         """Constructor for the DataManager class.
@@ -239,7 +241,8 @@ class DataManager(nn.Module):
     def setup_train(self):
         """Sets up the data manager for training.
 
-        Here you will define any subclass specific object attributes from the attribute"""
+        Here you will define any subclass specific object attributes from the attribute
+        """
 
     @abstractmethod
     def setup_eval(self):
@@ -396,11 +399,16 @@ class DNeRFDataManager(DataManager, Generic[TDataset]):
         if test_mode == "inference":
             self.dataparser.downscale_factor = 1  # Avoid opening images
         self.includes_time = self.dataparser.includes_time
-        self.train_dataparser_outputs: DNeRFDataParserOutputs = self.dataparser.get_dataparser_outputs(split="train")
+        self.sample_idx_enabled = self.dataparser.sample_idx_enabled
+        self.train_dataparser_outputs: DNeRFDataParserOutputs = (
+            self.dataparser.get_dataparser_outputs(split="train")
+        )
 
         self.train_dataset = self.create_train_dataset()
         self.eval_dataset = self.create_eval_dataset()
-        self.exclude_batch_keys_from_device = self.train_dataset.exclude_batch_keys_from_device
+        self.exclude_batch_keys_from_device = (
+            self.train_dataset.exclude_batch_keys_from_device
+        )
         if self.config.masks_on_gpu is True:
             self.exclude_batch_keys_from_device.remove("mask")
 
@@ -408,7 +416,10 @@ class DNeRFDataManager(DataManager, Generic[TDataset]):
             cameras = self.train_dataparser_outputs.cameras
             if len(cameras) > 1:
                 for i in range(1, len(cameras)):
-                    if cameras[0].width != cameras[i].width or cameras[0].height != cameras[i].height:
+                    if (
+                        cameras[0].width != cameras[i].width
+                        or cameras[0].height != cameras[i].height
+                    ):
                         CONSOLE.print("Variable resolution, using variable_res_collate")
                         self.config.collate_fn = variable_res_collate
                         break
@@ -449,22 +460,30 @@ class DNeRFDataManager(DataManager, Generic[TDataset]):
     def create_eval_dataset(self) -> TDataset:
         """Sets up the data loaders for evaluation"""
         return self.dataset_type(
-            dataparser_outputs=self.dataparser.get_dataparser_outputs(split=self.test_split),
+            dataparser_outputs=self.dataparser.get_dataparser_outputs(
+                split=self.test_split
+            ),
             scale_factor=self.config.camera_res_scale_factor,
         )
 
-    def _get_pixel_sampler(self, dataset: TDataset, *args: Any, **kwargs: Any) -> PixelSampler:
+    def _get_pixel_sampler(
+        self, dataset: TDataset, *args: Any, **kwargs: Any
+    ) -> PixelSampler:
         """Infer pixel sampler to use."""
         if self.config.patch_size > 1:
             return PatchPixelSampler(*args, **kwargs, patch_size=self.config.patch_size)
 
         # If all images are equirectangular, use equirectangular pixel sampler
-        is_equirectangular = dataset.cameras.camera_type == CameraType.EQUIRECTANGULAR.value
+        is_equirectangular = (
+            dataset.cameras.camera_type == CameraType.EQUIRECTANGULAR.value
+        )
         if is_equirectangular.all():
             return EquirectangularPixelSampler(*args, **kwargs)
         # Otherwise, use the default pixel sampler
         if is_equirectangular.any():
-            CONSOLE.print("[bold yellow]Warning: Some cameras are equirectangular, but using default pixel sampler.")
+            CONSOLE.print(
+                "[bold yellow]Warning: Some cameras are equirectangular, but using default pixel sampler."
+            )
         return PixelSampler(*args, **kwargs)
 
     def setup_train(self):
@@ -482,7 +501,9 @@ class DNeRFDataManager(DataManager, Generic[TDataset]):
             exclude_batch_keys_from_device=self.exclude_batch_keys_from_device,
         )
         self.iter_train_image_dataloader = iter(self.train_image_dataloader)
-        self.train_pixel_sampler = self._get_pixel_sampler(self.train_dataset, self.config.train_num_rays_per_batch)
+        self.train_pixel_sampler = self._get_pixel_sampler(
+            self.train_dataset, self.config.train_num_rays_per_batch
+        )
         self.train_camera_optimizer = self.config.camera_optimizer.setup(
             num_cameras=self.train_dataset.cameras.size, device=self.device
         )
@@ -506,7 +527,9 @@ class DNeRFDataManager(DataManager, Generic[TDataset]):
             exclude_batch_keys_from_device=self.exclude_batch_keys_from_device,
         )
         self.iter_eval_image_dataloader = iter(self.eval_image_dataloader)
-        self.eval_pixel_sampler = self._get_pixel_sampler(self.eval_dataset, self.config.eval_num_rays_per_batch)
+        self.eval_pixel_sampler = self._get_pixel_sampler(
+            self.eval_dataset, self.config.eval_num_rays_per_batch
+        )
         self.eval_camera_optimizer = self.config.camera_optimizer.setup(
             num_cameras=self.eval_dataset.cameras.size, device=self.device
         )
@@ -543,7 +566,13 @@ class DNeRFDataManager(DataManager, Generic[TDataset]):
         # (2) Provide times encodings
         times = batch["times"]
 
-        ray_bundle = self.train_ray_generator.forward(ray_indices, times=times)
+        # (3) Provide sample indices
+        sample_inds = batch["sample_inds"]
+        # import pdb; pdb.set_trace()
+
+        ray_bundle = self.train_ray_generator.forward(
+            ray_indices, times=times, sample_inds=sample_inds
+        )
 
         return ray_bundle, batch
 
@@ -589,4 +618,3 @@ class DNeRFDataManager(DataManager, Generic[TDataset]):
             assert len(camera_opt_params) == 0
 
         return param_groups
-

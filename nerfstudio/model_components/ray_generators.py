@@ -47,6 +47,7 @@ class RayGenerator(nn.Module):
         self,
         ray_indices: Int[Tensor, "num_rays 3"],
         times: Optional[Float[Tensor, "num_rays 1"]] = None,
+        sample_inds: Optional[Int[Tensor, "num_rays 1"]] = None,
     ) -> RayBundle:
         """Index into the cameras to generate the rays.
 
@@ -65,5 +66,6 @@ class RayGenerator(nn.Module):
             coords=coords,
             camera_opt_to_camera=camera_opt_to_camera,
             times=times,
+            sample_inds=sample_inds,
         )
         return ray_bundle

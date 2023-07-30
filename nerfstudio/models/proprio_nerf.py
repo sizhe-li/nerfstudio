@@ -1,4 +1,3 @@
-
 # Copyright 2022 the Regents of the University of California, Nerfstudio Team and contributors. All rights reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -20,7 +19,7 @@ NeRF implementation that combines many recent advancements.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Dict, List, Literal, Tuple, Type, Any
+from typing import Dict, List, Literal, Tuple, Type
 
 import numpy as np
 import torch
@@ -30,7 +29,6 @@ from torchmetrics.functional import structural_similarity_index_measure
 from torchmetrics.image.lpip import LearnedPerceptualImagePatchSimilarity
 
 from nerfstudio.cameras.rays import RayBundle, RaySamples
-from nerfstudio.configs.config_utils import to_immutable_dict
 from nerfstudio.engine.callbacks import TrainingCallback, TrainingCallbackAttributes, TrainingCallbackLocation
 from nerfstudio.field_components.field_heads import FieldHeadNames
 from nerfstudio.field_components.spatial_distortions import SceneContraction
@@ -50,15 +48,13 @@ from nerfstudio.model_components.scene_colliders import NearFarCollider
 from nerfstudio.model_components.shaders import NormalsShader
 from nerfstudio.models.base_model import Model, ModelConfig
 from nerfstudio.utils import colormaps
-from nerfstudio.utils.math import components_from_spherical_harmonics, safe_normalize
 
-from nerfstudio.field_components.temporal_distortions import TemporalDistortionKind
 
 @dataclass
-class DNerfactoModelConfig(ModelConfig):
+class NerfactoModelConfig(ModelConfig):
     """Nerfacto Model Config"""
 
-    _target: Type = field(default_factory=lambda: SizheDyNeRF)
+    _target: Type = field(default_factory=lambda: NerfactoModel)
     near_plane: float = 0.05
     """How far along the ray to start sampling."""
     far_plane: float = 1000.0
@@ -131,65 +127,26 @@ class DNerfactoModelConfig(ModelConfig):
     appearance_embed_dim: int = 32
     """Dimension of the appearance embedding."""
 
-    enable_temporal_distortion: bool = False
-    """Specifies whether or not to include ray warping based on time."""
-    temporal_distortion_params: Dict[str, Any] = to_immutable_dict({"kind": TemporalDistortionKind.DNERF})
-    """Parameters to instantiate temporal distortion with"""
 
-
-class SizheDyNeRF(Model):
+class NerfactoModel(Model):
     """Nerfacto model
 
     Args:
         config: Nerfacto configuration to instantiate model
     """
 
-    config: DNerfactoModelConfig
-
-    def __init__(
-            self,
-            config: DNerfactoModelConfig,
-            **kwargs,
-    ) -> None:
-        self.temporal_distortion = None
-        super().__init__(
-            config=config,
-            **kwargs,
-        )
-
+    config: NerfactoModelConfig
 
     def populate_modules(self):
         """Set the fields and modules."""
         super().populate_modules()
-
-        if getattr(self.config, "enable_temporal_distortion", False):
-            params = self.config.temporal_distortion_params
-            kind = params.pop("kind")
-            self.temporal_distortion = kind.to_temporal_distortion(params)
 
         if self.config.disable_scene_contraction:
             scene_contraction = None
         else:
             scene_contraction = SceneContraction(order=float("inf"))
 
-
         # Fields
-        self.static_field = NerfactoField(
-            self.scene_box.aabb,
-            hidden_dim=self.config.hidden_dim,
-            num_levels=self.config.num_levels,
-            max_res=self.config.max_res,
-            log2_hashmap_size=self.config.log2_hashmap_size,
-            hidden_dim_color=self.config.hidden_dim_color,
-            hidden_dim_transient=self.config.hidden_dim_transient,
-            spatial_distortion=scene_contraction,
-            num_images=self.num_train_data,
-            use_pred_normals=self.config.predict_normals,
-            use_average_appearance_embedding=self.config.use_average_appearance_embedding,
-            appearance_embedding_dim=self.config.appearance_embed_dim,
-            implementation=self.config.implementation,
-        )
-
         self.field = NerfactoField(
             self.scene_box.aabb,
             hidden_dim=self.config.hidden_dim,
@@ -279,10 +236,6 @@ class SizheDyNeRF(Model):
         param_groups = {}
         param_groups["proposal_networks"] = list(self.proposal_networks.parameters())
         param_groups["fields"] = list(self.field.parameters())
-
-        if self.temporal_distortion is not None:
-            param_groups["temporal_distortion"] = list(self.temporal_distortion.parameters())
-
         return param_groups
 
     def get_training_callbacks(
@@ -322,26 +275,6 @@ class SizheDyNeRF(Model):
     def get_outputs(self, ray_bundle: RayBundle):
         ray_samples: RaySamples
         ray_samples, weights_list, ray_samples_list = self.proposal_sampler(ray_bundle, density_fns=self.density_fns)
-
-        # import pdb; pdb.set_trace()
-
-        
-        if self.temporal_distortion is not None:
-            offsets = None
-            if ray_samples.times is not None:
-                offsets = self.temporal_distortion(
-                    ray_samples.frustums.get_positions(),
-                    # normalize from [0, 1] to [0, 0.2]
-                    ray_samples.times * 0.2
-                )
-
-                # # zero out the offsets for canonical rays
-                # nonzero_time = (ray_samples.times > 0).float()
-                # ray_samples.times = ray_samples.times * nonzero_time 
-
-            ray_samples.frustums.set_offsets(offsets)
-        
-        
         field_outputs = self.field.forward(ray_samples, compute_normals=self.config.predict_normals)
         if self.config.use_gradient_scaling:
             field_outputs = scale_gradients_by_distance_squared(field_outputs, ray_samples)
@@ -355,17 +288,13 @@ class SizheDyNeRF(Model):
         accumulation = self.renderer_accumulation(weights=weights)
 
         steps = (ray_samples.frustums.starts + ray_samples.frustums.ends) / 2
-
-        # offsets_normals = self.renderer_normals(normals=offsets, weights=weights)
-        # offsets_normals = self.normals_shader(offsets_normals)
-
         outputs = {
             "rgb": rgb,
             "accumulation": accumulation,
             "depth": depth,
             "weights": weights,
             "steps": steps,
-            # "offsets": offsets_normals,
+
         }
 
         if self.config.predict_normals:

@@ -352,3 +352,26 @@ class NormalsRenderer(nn.Module):
         if normalize:
             n = safe_normalize(n)
         return n
+
+
+class FeatureRenderer(nn.Module):
+    """Calculate normals along the ray."""
+
+    @classmethod
+    def forward(
+        cls,
+        features: Float[Tensor, "*bs num_samples num_features"],
+        weights: Float[Tensor, "*bs num_samples 1"],
+        normalize: bool = True,
+    ) -> Float[Tensor, "*bs 3"]:
+        """Calculate normals along the ray.
+
+        Args:
+            normals: Normals for each sample.
+            weights: Weights of each sample.
+            normalize: Normalize normals.
+        """
+        n = torch.sum(weights * features, dim=-2)
+        if normalize:
+            n = safe_normalize(n)
+        return n

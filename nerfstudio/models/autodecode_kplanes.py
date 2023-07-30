@@ -22,15 +22,17 @@ import functools
 from dataclasses import dataclass, field
 from typing import Dict, List, Optional, Tuple, Type
 
+import math
 import numpy as np
 import torch
+import torch.nn as nn
 from torch.nn import Parameter
 from torchmetrics import PeakSignalNoiseRatio
 from torchmetrics.functional import structural_similarity_index_measure
 from torchmetrics.image.lpip import LearnedPerceptualImagePatchSimilarity
 from typing_extensions import Literal
 
-from nerfstudio.cameras.rays import RayBundle
+from nerfstudio.cameras.rays import RayBundle, RaySamples
 from nerfstudio.configs.config_utils import to_immutable_dict
 from nerfstudio.engine.callbacks import (
     TrainingCallback,
@@ -55,7 +57,7 @@ from nerfstudio.model_components.scene_colliders import NearFarCollider
 from nerfstudio.models.base_model import Model, ModelConfig
 from nerfstudio.utils import colormaps, misc
 
-from nerfstudio.fields.kplanes_field import KPlanesDensityField, KPlanesField
+from nerfstudio.fields.autodecode_kplanes_field import KPlanesDensityField, KPlanesField
 
 
 @dataclass
@@ -142,15 +144,13 @@ class KPlanesModelConfig(ModelConfig):
     loss_coefficients: Dict[str, float] = to_immutable_dict(
         {
             "img": 1.0,
-            "dense_features": 0.001,
+            # "dense_features": 0.001,
             "interlevel": 1.0,
             "distortion": 0.001,
             "plane_tv": 0.0001,
             "plane_tv_proposal_net": 0.0001,
-            "l1_time_planes": 0.0001,
-            "l1_time_planes_proposal_net": 0.0001,
-            "time_smoothness": 0.1,
-            "time_smoothness_proposal_net": 0.001,
+            "l1_codes": 0.0001,
+            "codes_smoothness": 0.0001,
         }
     )
     """Loss coefficients."""
@@ -172,6 +172,18 @@ class KPlanesModel(Model):
             scene_contraction = SceneContraction(order=float("inf"))
         else:
             scene_contraction = None
+    
+        self.n_samples = self.kwargs["metadata"]["sample_inds"].max() + 1
+
+
+        self.sample_embedding = nn.Embedding(
+            self.n_samples, self.config.grid_feature_dim
+        )
+        torch.nn.init.normal_(
+            self.sample_embedding.weight,
+            mean=0.0,
+            std=0.01 / math.sqrt(self.config.grid_feature_dim),
+        )
 
         # Fields
         self.field = KPlanesField(
@@ -179,6 +191,7 @@ class KPlanesModel(Model):
             num_images=self.num_train_data,
             grid_base_resolution=self.config.grid_base_resolution,
             grid_feature_dim=self.config.grid_feature_dim,
+            sample_code_dim=self.config.grid_feature_dim,
             concat_across_scales=self.config.concat_features_across_scales,
             multiscale_res=self.config.multiscale_res,
             spatial_distortion=scene_contraction,
@@ -193,38 +206,52 @@ class KPlanesModel(Model):
         # Build the proposal network(s)
         self.proposal_networks = torch.nn.ModuleList()
         if self.config.use_same_proposal_network:
-            assert len(self.config.proposal_net_args_list) == 1, "Only one proposal network is allowed."
+            assert (
+                len(self.config.proposal_net_args_list) == 1
+            ), "Only one proposal network is allowed."
             prop_net_args = self.config.proposal_net_args_list[0]
             network = KPlanesDensityField(
                 self.scene_box.aabb,
                 spatial_distortion=scene_contraction,
                 linear_decoder=self.config.linear_decoder,
+                sample_code_dim=self.config.grid_feature_dim,
                 **prop_net_args,
             )
             self.proposal_networks.append(network)
             self.density_fns.extend([network.density_fn for _ in range(num_prop_nets)])
         else:
             for i in range(num_prop_nets):
-                prop_net_args = self.config.proposal_net_args_list[min(i, len(self.config.proposal_net_args_list) - 1)]
+                prop_net_args = self.config.proposal_net_args_list[
+                    min(i, len(self.config.proposal_net_args_list) - 1)
+                ]
                 network = KPlanesDensityField(
                     self.scene_box.aabb,
                     spatial_distortion=scene_contraction,
                     linear_decoder=self.config.linear_decoder,
+                    sample_code_dim=self.config.grid_feature_dim,
                     **prop_net_args,
                 )
                 self.proposal_networks.append(network)
-            self.density_fns.extend([network.density_fn for network in self.proposal_networks])
+            self.density_fns.extend(
+                [network.density_fn for network in self.proposal_networks]
+            )
 
         # Samplers
         def update_schedule(step):
             return np.clip(
-                np.interp(step, [0, self.config.proposal_warmup], [0, self.config.proposal_update_every]),
+                np.interp(
+                    step,
+                    [0, self.config.proposal_warmup],
+                    [0, self.config.proposal_update_every],
+                ),
                 1,
                 self.config.proposal_update_every,
             )
 
         if self.config.is_contracted:
-            initial_sampler = UniformLinDispPiecewiseSampler(single_jitter=self.config.single_jitter)
+            initial_sampler = UniformLinDispPiecewiseSampler(
+                single_jitter=self.config.single_jitter
+            )
         else:
             initial_sampler = UniformSampler(single_jitter=self.config.single_jitter)
 
@@ -238,7 +265,9 @@ class KPlanesModel(Model):
         )
 
         # Collider
-        self.collider = NearFarCollider(near_plane=self.config.near_plane, far_plane=self.config.far_plane)
+        self.collider = NearFarCollider(
+            near_plane=self.config.near_plane, far_plane=self.config.far_plane
+        )
 
         # renderers
         self.renderer_rgb = RGBRenderer(background_color=self.config.background_color)
@@ -253,13 +282,15 @@ class KPlanesModel(Model):
         self.psnr = PeakSignalNoiseRatio(data_range=1.0)
         self.ssim = structural_similarity_index_measure
         self.lpips = LearnedPerceptualImagePatchSimilarity(normalize=True)
-        self.temporal_distortion = len(self.config.grid_base_resolution) == 4  # for viewer
+        self.temporal_distortion = (
+            len(self.config.grid_base_resolution) == 4
+        )  # for viewer
 
     def get_param_groups(self) -> Dict[str, List[Parameter]]:
         param_groups = {
             "proposal_networks": list(self.proposal_networks.parameters()),
-            "fields": list(self.field.parameters())
-            # "fields": list(self.field.dense_feature_head.parameters())
+            "fields": list(self.field.parameters()),
+            "embeddings": list(self.sample_embedding.parameters()),
         }
         return param_groups
 
@@ -296,11 +327,20 @@ class KPlanesModel(Model):
 
     def get_outputs(self, ray_bundle: RayBundle):
         density_fns = self.density_fns
-        if ray_bundle.times is not None:
-            density_fns = [functools.partial(f, times=ray_bundle.times) for f in density_fns]
+
+        conditioning_codes = self.sample_embedding(ray_bundle.sample_inds)
+
+        density_fns = [
+            functools.partial(f, conditioning_codes=conditioning_codes)
+            for f in density_fns
+        ]
+
+        ray_samples: RaySamples
         ray_samples, weights_list, ray_samples_list = self.proposal_sampler(
             ray_bundle, density_fns=density_fns
         )
+
+        ray_samples.metadata['conditioning_codes'] = conditioning_codes
         field_outputs = self.field(ray_samples)
 
         weights = ray_samples.get_weights(field_outputs[FieldHeadNames.DENSITY])
@@ -308,10 +348,11 @@ class KPlanesModel(Model):
         ray_samples_list.append(ray_samples)
 
         rgb = self.renderer_rgb(rgb=field_outputs[FieldHeadNames.RGB], weights=weights)
-        dense_features = self.renderer_rgb(rgb=field_outputs["dense_features"], weights=weights)
+        # dense_features = self.renderer_rgb(
+        #     rgb=field_outputs["dense_features"], weights=weights
+        # )
 
         depth = self.renderer_depth(weights=weights, ray_samples=ray_samples)
-        ndf_features = self.renderer_features(weights=weights, features=field_outputs["ndf_features"])
 
         steps = (ray_samples.frustums.starts + ray_samples.frustums.ends) / 2
         outputs = {
@@ -319,8 +360,7 @@ class KPlanesModel(Model):
             "depth": depth,
             "weights": weights,
             "steps": steps,
-            "ndf_features": ndf_features,
-            "dense_features": dense_features,
+            # "dense_features": dense_features,
         }
 
         # These use a lot of GPU memory, so we avoid storing them for eval.
@@ -338,12 +378,14 @@ class KPlanesModel(Model):
     def get_metrics_dict(self, outputs, batch):
         image = batch["image"].to(self.device)
 
-        metrics_dict = {
-            "psnr": self.psnr(outputs["rgb"], image)
-        }
+        metrics_dict = {"psnr": self.psnr(outputs["rgb"], image)}
         if self.training:
-            metrics_dict["interlevel"] = interlevel_loss(outputs["weights_list"], outputs["ray_samples_list"])
-            metrics_dict["distortion"] = distortion_loss(outputs["weights_list"], outputs["ray_samples_list"])
+            metrics_dict["interlevel"] = interlevel_loss(
+                outputs["weights_list"], outputs["ray_samples_list"]
+            )
+            metrics_dict["distortion"] = distortion_loss(
+                outputs["weights_list"], outputs["ray_samples_list"]
+            )
 
             prop_grids = [p.grids.plane_coefs for p in self.proposal_networks]
             field_grids = [g.plane_coefs for g in self.field.grids]
@@ -351,21 +393,23 @@ class KPlanesModel(Model):
             metrics_dict["plane_tv"] = space_tv_loss(field_grids)
             metrics_dict["plane_tv_proposal_net"] = space_tv_loss(prop_grids)
 
-            if len(self.config.grid_base_resolution) == 4:
-                metrics_dict["l1_time_planes"] = l1_time_planes(field_grids)
-                metrics_dict["l1_time_planes_proposal_net"] = l1_time_planes(prop_grids)
-                metrics_dict["time_smoothness"] = time_smoothness(field_grids)
-                metrics_dict["time_smoothness_proposal_net"] = time_smoothness(prop_grids)
+            # metrics_dict["l1_codes"] = torch.abs(1 - self.sample_embedding.weight).mean()
+
+            # first_difference = self.sample_embedding.weight[1:] - self.sample_embedding.weight[:-1] # h-1, w
+            # second_difference = first_difference[1:] - first_difference[:-1] # h-2, w
+            # metrics_dict["codes_smoothness"] = torch.square(second_difference).mean()
 
         return metrics_dict
 
     def get_loss_dict(self, outputs, batch, metrics_dict=None):
         image = batch["image"].to(self.device)
-        dense_features_gt = batch["dense_features_gt"].to(self.device)
+        # dense_features_gt = batch["dense_features_gt"].to(self.device)
 
         loss_dict = {
             "rgb": self.rgb_loss(image, outputs["rgb"]),
-            "dense_features": self.rgb_loss(dense_features_gt, outputs["dense_features"]),
+            # "dense_features": self.rgb_loss(
+            #     dense_features_gt, outputs["dense_features"]
+            # ),
         }
         if self.training:
             for key in self.config.loss_coefficients:
@@ -383,7 +427,9 @@ class KPlanesModel(Model):
 
         rgb = outputs["rgb"]
         acc = colormaps.apply_colormap(outputs["accumulation"])
-        depth = colormaps.apply_depth_colormap(outputs["depth"], accumulation=outputs["accumulation"])
+        depth = colormaps.apply_depth_colormap(
+            outputs["depth"], accumulation=outputs["accumulation"]
+        )
 
         combined_rgb = torch.cat([image, rgb], dim=1)
         combined_acc = torch.cat([acc], dim=1)
@@ -397,9 +443,13 @@ class KPlanesModel(Model):
         metrics_dict = {
             "psnr": float(self.psnr(image, rgb).item()),
             "ssim": float(self.ssim(image, rgb)),
-            "lpips": float(self.lpips(image, rgb))
+            "lpips": float(self.lpips(image, rgb)),
         }
-        images_dict = {"img": combined_rgb, "accumulation": combined_acc, "depth": combined_depth}
+        images_dict = {
+            "img": combined_rgb,
+            "accumulation": combined_acc,
+            "depth": combined_depth,
+        }
 
         for i in range(self.config.num_proposal_iterations):
             key = f"prop_depth_{i}"
@@ -492,7 +542,9 @@ def compute_plane_smoothness(t: torch.Tensor) -> float:
     _, h, _ = t.shape
     # Convolve with a second derivative filter, in the time dimension which is dimension 2
     first_difference = t[..., 1:, :] - t[..., : h - 1, :]  # [c, h-1, w]
-    second_difference = first_difference[..., 1:, :] - first_difference[..., : h - 2, :]  # [c, h-2, w]
+    second_difference = (
+        first_difference[..., 1:, :] - first_difference[..., : h - 2, :]
+    )  # [c, h-2, w]
     # Take the L2 norm of the result
     return torch.square(second_difference).mean()
 

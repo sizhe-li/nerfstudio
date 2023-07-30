@@ -47,6 +47,7 @@ class ControlPanel:
         self,
         viser_server: ViserServer,
         time_enabled: bool,
+        sample_idx_enabled: bool,
         rerender_cb: Callable,
         crop_update_cb: Callable,
         update_output_cb: Callable,
@@ -139,6 +140,9 @@ class ControlPanel:
         self._time = ViewerSlider("Time", 0.0, 0.0, 1.0, 0.01, cb_hook=rerender_cb, hint="Time to render")
         self._time_enabled = time_enabled
 
+        self._sample_idx = ViewerNumber("Sample Index", 0, cb_hook=rerender_cb, hint="Index of the current sample")
+        self._sample_idx_enabled = sample_idx_enabled
+
         self.add_element(self._train_speed)
         self.add_element(self._train_util)
         with self.viser_server.gui_folder("Render Options"):
@@ -174,6 +178,7 @@ class ControlPanel:
             self.add_element(self._crop_max, additional_tags=("crop",))
 
         self.add_element(self._time, additional_tags=("time",))
+        self.add_element(self._sample_idx, additional_tags=("sample_index",))
 
     def _train_speed_cb(self) -> None:
         """Callback for when the train speed is changed"""
@@ -220,6 +225,7 @@ class ControlPanel:
         for e in self._elements_by_tag["crop"]:
             e.set_hidden(not self.crop_viewport)
         self._time.set_hidden(not self._time_enabled)
+        self._sample_idx.set_hidden(not self._sample_idx_enabled)
         self._split_percentage.set_hidden(not self._split.value)
         self._split_output_render.set_hidden(not self._split.value)
         self._split_colormap.set_hidden(not self._split.value)
@@ -322,6 +328,10 @@ class ControlPanel:
     def time(self, value: float):
         """Sets the background color"""
         self._time.value = value
+
+    @property
+    def sample_idx(self) -> int:
+        return self._sample_idx.value
 
     @property
     def colormap_options(self) -> ColormapOptions:

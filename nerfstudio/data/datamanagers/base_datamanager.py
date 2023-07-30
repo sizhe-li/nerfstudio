@@ -161,6 +161,7 @@ class DataManager(nn.Module):
         train_dataset (Dataset): the dataset for the train dataset
         eval_dataset (Dataset): the dataset for the eval dataset
         includes_time (bool): whether the dataset includes time information
+        sample_idx_enabled (bool): whether the dataset includes sample index
 
         Additional attributes specific to each subclass are defined in the setup_train and setup_eval
         functions.
@@ -172,6 +173,7 @@ class DataManager(nn.Module):
     train_sampler: Optional[DistributedSampler] = None
     eval_sampler: Optional[DistributedSampler] = None
     includes_time: bool = False
+    sample_idx_enabled: bool = False
 
     def __init__(self):
         """Constructor for the DataManager class.
@@ -396,6 +398,7 @@ class VanillaDataManager(DataManager, Generic[TDataset]):
         if test_mode == "inference":
             self.dataparser.downscale_factor = 1  # Avoid opening images
         self.includes_time = self.dataparser.includes_time
+        self.sample_idx_enabled = self.dataparser.sample_idx_enabled
         self.train_dataparser_outputs: DataparserOutputs = self.dataparser.get_dataparser_outputs(split="train")
 
         self.train_dataset = self.create_train_dataset()

@@ -82,6 +82,7 @@ class DNeRF(DataParser):
     config: DNeRFDataParserConfig
     downscale_factor: Optional[int] = None
     includes_time: bool = True
+    sample_idx_enabled: bool = True
 
     def _generate_dataparser_outputs(self, split="train"):
         assert (
@@ -99,7 +100,9 @@ class DNeRF(DataParser):
         image_filenames = []
         mask_filenames = []
         depth_filenames = []
+        dense_features_filenames = []
         times = []
+        sample_inds = []
         sample_to_camera_idx = []
 
         # camera related
@@ -124,11 +127,16 @@ class DNeRF(DataParser):
         distort = []
 
         # sample dependent. we are decoupling cameras and samples
-        for frame in meta["frames"]:
+        for sample_cnt, frame in enumerate(meta["frames"]):
             filepath = Path(frame["file_path"])
             fname = self._get_fname(filepath, data_dir)
 
             times.append(frame["time"])
+
+            sample_idx = int(frame["time"] * 10) if frame.get("sample_idx") is None else frame["sample_idx"]
+            #TODO: should print warning that says we are assuming the first case to be hsa finger
+            sample_inds.append(sample_idx)
+
             sample_to_camera_idx.append(frame['camera_idx'])
 
             image_filenames.append(fname)
@@ -147,6 +155,10 @@ class DNeRF(DataParser):
                     depth_filepath, data_dir, downsample_folder_prefix="depths_"
                 )
                 depth_filenames.append(depth_fname)
+            
+            dense_features_filepath = data_dir / Path(str(filepath).replace("images", "dense_features").replace(".png", ".npz"))
+            if dense_features_filepath.exists():
+                dense_features_filenames.append(str(dense_features_filepath))
 
         # camera dependent
         for cam_cfg in meta["cameras"]:
@@ -262,7 +274,8 @@ class DNeRF(DataParser):
         scene_box = SceneBox(
             aabb=torch.tensor(
                 [
-                    [-aabb_scale, -aabb_scale, -aabb_scale],
+                    [-aabb_scale, -aabb_scale, -0.0],
+                    # [-aabb_scale, -aabb_scale, -0.0],
                     [aabb_scale, aabb_scale, aabb_scale],
                 ],
                 dtype=torch.float32,
@@ -330,6 +343,7 @@ class DNeRF(DataParser):
         
         sample_to_camera_idx = torch.from_numpy(np.array(sample_to_camera_idx)).to(torch.long)
         times = torch.tensor(times, dtype=torch.float32)
+        sample_inds = torch.tensor(sample_inds, dtype=torch.long)
 
         dataparser_outputs = DNeRFDataParserOutputs(
             image_filenames=image_filenames,
@@ -342,8 +356,13 @@ class DNeRF(DataParser):
                 "depth_filenames": depth_filenames
                 if len(depth_filenames) > 0
                 else None,
+                "dense_features_filenames": dense_features_filenames
+                if len(dense_features_filenames) > 0
+                else None,
+
                 "depth_unit_scale_factor": self.config.depth_unit_scale_factor,
                 "times": times,
+                "sample_inds": sample_inds if self.sample_idx_enabled else None,
             },
             sample_to_camera_idx=sample_to_camera_idx
         )

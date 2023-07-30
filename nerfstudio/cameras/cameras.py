@@ -20,6 +20,7 @@ import math
 from dataclasses import dataclass
 from enum import Enum, auto
 from typing import Dict, List, Literal, Optional, Tuple, Union
+from torchtyping import TensorType
 
 import cv2
 import torch
@@ -91,7 +92,8 @@ class Cameras(TensorDataclass):
     height: Shaped[Tensor, "*num_cameras 1"]
     distortion_params: Optional[Float[Tensor, "*num_cameras 6"]]
     camera_type: Int[Tensor, "*num_cameras 1"]
-    times: Optional[Float[Tensor, "num_cameras 1"]]
+    times: Optional[TensorType["num_cameras", 1]]
+    sample_inds: Optional[TensorType["num_cameras", 1]]
     metadata: Optional[Dict]
 
     def __init__(
@@ -110,7 +112,8 @@ class Cameras(TensorDataclass):
             List[CameraType],
             CameraType,
         ] = CameraType.PERSPECTIVE,
-        times: Optional[Float[Tensor, "num_cameras"]] = None,
+        times: Optional[TensorType["num_cameras"]] = None,
+        sample_inds: Optional[TensorType["num_cameras"]] = None,
         metadata: Optional[Dict] = None,
     ) -> None:
         """Initializes the Cameras object.
@@ -146,6 +149,7 @@ class Cameras(TensorDataclass):
         self.width = self._init_get_height_width(width, self.cx)
         self.camera_type = self._init_get_camera_type(camera_type)
         self.times = self._init_get_times(times)
+        self.sample_inds = self._init_get_sample_inds(sample_inds)
 
         self.metadata = metadata
 
@@ -257,6 +261,17 @@ class Cameras(TensorDataclass):
 
         return times
 
+    def _init_get_sample_inds(self, sample_inds: Union[None, torch.Tensor]) -> Union[None, torch.Tensor]:
+        if sample_inds is None:
+            sample_inds = None
+        elif isinstance(sample_inds, torch.Tensor):
+            if sample_inds.ndim == 0 or sample_inds.shape[-1] != 1:
+                sample_inds = sample_inds.unsqueeze(-1).to(self.device)
+        else:
+            raise ValueError(f"sample inds must be None or a tensor, got {type(sample_inds)}")
+
+        return sample_inds
+
     @property
     def device(self) -> TORCH_DEVICE:
         """Returns the device that the camera is on."""
@@ -320,6 +335,7 @@ class Cameras(TensorDataclass):
         disable_distortion: bool = False,
         aabb_box: Optional[SceneBox] = None,
         times: Optional[Union[Float[Tensor, "*num_rays 1"], float]] = None,
+        sample_inds: Optional[Union[Int[Tensor, "*num_rays 1"], int]] = None,
     ) -> RayBundle:
         """Generates rays for the given camera indices.
 
@@ -397,6 +413,9 @@ class Cameras(TensorDataclass):
         
         if times is not None and isinstance(times, float):
             times = torch.tensor([times], device=cameras.device)
+
+        if sample_inds is not None and isinstance(sample_inds, int):
+            sample_inds = torch.tensor([sample_inds], device=cameras.device)
             
 
         assert camera_indices.shape[-1] == len(
@@ -451,6 +470,9 @@ class Cameras(TensorDataclass):
 
         if times is not None:
             times = times.broadcast_to(coords.shape[:-1] + (1,)).to(torch.float32)
+        
+        if sample_inds is not None:
+            sample_inds = sample_inds.broadcast_to(coords.shape[:-1] + (1,)).to(torch.long)
 
         # Checking our tensors have been standardized
         assert isinstance(coords, torch.Tensor) and isinstance(camera_indices, torch.Tensor)
@@ -463,7 +485,7 @@ class Cameras(TensorDataclass):
 
         raybundle = cameras._generate_rays_from_coords(
             camera_indices, coords, camera_opt_to_camera, distortion_params_delta, 
-            disable_distortion=disable_distortion, times=times
+            disable_distortion=disable_distortion, times=times, sample_inds=sample_inds
         )
 
         # If we have mandated that we don't keep the shape, then we flatten
@@ -504,6 +526,7 @@ class Cameras(TensorDataclass):
         distortion_params_delta: Optional[Float[Tensor, "*num_rays 6"]] = None,
         disable_distortion: bool = False,
         times: Optional[Float[Tensor, "*num_rays 1"]] = None,
+        sample_inds: Optional[Int[Tensor, "*num_rays 1"]] = None,
     ) -> RayBundle:
         """Generates rays for the given camera indices and coords where self isn't jagged
 
@@ -799,6 +822,8 @@ class Cameras(TensorDataclass):
         # if user did not provide times, use the default times if they exist
         if times is None:
             times = self.times[camera_indices, 0] if self.times is not None else None
+        if sample_inds is None:
+            sample_inds = self.sample_inds[camera_indices, 0] if self.sample_inds is not None else None
 
         metadata = (
             self._apply_fn_to_dict(self.metadata, lambda x: x[true_indices]) if self.metadata is not None else None
@@ -819,6 +844,7 @@ class Cameras(TensorDataclass):
             pixel_area=pixel_area,
             camera_indices=camera_indices,
             times=times,
+            sample_inds=sample_inds,
             metadata=metadata,
         )
 

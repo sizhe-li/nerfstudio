@@ -106,7 +106,7 @@ class MLP(FieldComponent):
         elif implementation == "tcnn":
             activation_str = activation_to_tcnn_string(activation)
             output_activation_str = activation_to_tcnn_string(out_activation)
-            if layer_width in [16, 32, 64, 128]:
+            if layer_width in [16, 32, 64, 128] and num_layers > 1:
                 network_config = {
                     "otype": "FullyFusedMLP",
                     "activation": activation_str,
@@ -131,7 +131,7 @@ class MLP(FieldComponent):
 
             self.tcnn_encoding = tcnn.Network(
                 n_input_dims=in_dim,
-                n_output_dims=out_dim,
+                n_output_dims=self.out_dim,
                 network_config=network_config,
             )
 

@@ -114,6 +114,7 @@ class ViewerState:
         CONSOLE.print(Panel(table, title="[bold][yellow]Viewer[/bold]", expand=False))
 
         self.include_time = self.pipeline.datamanager.includes_time
+        self.sample_idx_enabled = self.pipeline.datamanager.sample_idx_enabled
 
         # viewer specific variables
         self.output_type_changed = True
@@ -140,6 +141,7 @@ class ViewerState:
         self.control_panel = ControlPanel(
             self.viser_server,
             self.include_time,
+            self.sample_idx_enabled,
             self._interrupt_render,
             self._crop_params_update,
             self._output_type_change,
@@ -320,6 +322,8 @@ class ViewerState:
         else:
             camera_type = CameraType.PERSPECTIVE
 
+        n_samples = self.trainer.pipeline.model.n_samples
+
         camera = Cameras(
             fx=intrinsics_matrix[0, 0],
             fy=intrinsics_matrix[1, 1],
@@ -328,6 +332,7 @@ class ViewerState:
             camera_type=camera_type,
             camera_to_worlds=camera_to_world[None, ...],
             times=torch.tensor([self.control_panel.time], dtype=torch.float32),
+            sample_inds=torch.tensor([int(self.control_panel.time * (n_samples - 1))], dtype=torch.int32),
         )
         camera = camera.to(self.get_model().device)
         return camera

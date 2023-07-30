@@ -31,6 +31,7 @@ from nerfstudio.field_components.encodings import KPlanesEncoding
 from nerfstudio.field_components.field_heads import FieldHeadNames
 from nerfstudio.field_components.spatial_distortions import SpatialDistortion
 from nerfstudio.fields.base_field import Field, shift_directions_for_tcnn
+from nerfstudio.model_components.transformer import Transformer
 
 try:
     import tinycudann as tcnn
@@ -98,6 +99,7 @@ class KPlanesField(Field):
         concat_across_scales: bool = True,  # TODO: Maybe this should be removed
         grid_base_resolution: Sequence[int] = (128, 128, 128),
         grid_feature_dim: int = 32,
+        sample_code_dim: int = 32,
         multiscale_res: Sequence[int] = (1, 2, 4),
         spatial_distortion: Optional[SpatialDistortion] = None,
         appearance_embedding_dim: int = 0,
@@ -129,6 +131,8 @@ class KPlanesField(Field):
             if self.concat_across_scales
             else grid_feature_dim
         )
+        self.n_levels = len(multiscale_res)
+        self.sample_code_dim = sample_code_dim
 
         # Init appearance code-related parameters
         self.appearance_embedding_dim = appearance_embedding_dim
@@ -142,6 +146,16 @@ class KPlanesField(Field):
             self.use_average_appearance_embedding = (
                 use_average_appearance_embedding  # for test-time
             )
+        
+        self.decoder = Transformer(
+            dim=self.feature_dim,
+            depth=3,
+            heads=8,
+            dim_head=16,
+            mlp_dim=64,
+            selfatt=False,
+            kv_dim=self.sample_code_dim // 4,
+        )
 
         # Init decoder network
         if self.linear_decoder:
@@ -224,57 +238,6 @@ class KPlanesField(Field):
                 },
             )
 
-    def get_ndf_features(
-        self, positions: TensorType, times: Optional[TensorType] = None
-    ) -> Tuple[TensorType, TensorType]:
-        if self.spatial_distortion is not None:
-            positions = self.spatial_distortion(positions)
-            positions = positions / 2  # from [-2, 2] to [-1, 1]
-        else:
-            # From [0, 1] to [-1, 1]
-            positions = (
-                SceneBox.get_normalized_positions(positions, self.aabb) * 2.0 - 1.0
-            )
-
-        if self.has_time_planes:
-            assert (
-                times is not None
-            ), "Initialized model with time-planes, but no time data is given"
-            # Normalize timestamps from [0, 1] to [-1, 1]
-            timestamps = times * 2.0 - 1.0
-            positions = torch.cat(
-                (positions, timestamps), dim=-1
-            )  # [n_rays, n_samples, 4]
-
-        positions_flat = positions.view(-1, positions.shape[-1])
-        grid_features = interpolate_ms_features(
-            positions_flat,
-            grid_encodings=self.grids,
-            concat_features=self.concat_across_scales,
-        )
-        if len(grid_features) < 1:
-            grid_features = torch.zeros(
-                (0, 1), device=grid_features.device, requires_grad=True
-            )
-        if self.linear_decoder:
-            raise ValueError("Linear decoder not supported for NDF features")
-        else:
-            ndf_features = self.sigma_net_1(grid_features).view(
-                *positions.shape[:-1], -1
-            )
-            features = self.sigma_net_act(ndf_features)
-            features = self.sigma_net_2(features)
-
-            features, density_before_activation = torch.split(
-                features, [self.geo_feat_dim, 1], dim=-1
-            )
-
-        # Rectifying the density with an exponential is much more stable than a ReLU or
-        # softplus, because it enables high post-activation (float32) density outputs
-        # from smaller internal (float16) parameters.
-        density = trunc_exp(density_before_activation.to(positions) - 1)
-        return density, ndf_features
-
     def get_density(self, ray_samples: RaySamples) -> Tuple[TensorType, TensorType]:
         """Computes and returns the densities."""
         positions = ray_samples.frustums.get_positions()
@@ -297,16 +260,34 @@ class KPlanesField(Field):
                 (positions, timestamps), dim=-1
             )  # [n_rays, n_samples, 4]
 
-        positions_flat = positions.view(-1, positions.shape[-1])
+        positions_flat = positions
+        # positions_flat = positions.view(-1, positions.shape[-1])
         grid_features = interpolate_ms_features(
             positions_flat,
             grid_encodings=self.grids,
             concat_features=self.concat_across_scales,
         )
+
         if len(grid_features) < 1:
             grid_features = torch.zeros(
                 (0, 1), device=grid_features.device, requires_grad=True
             )
+
+        # import pdb; pdb.set_trace()
+        # n_rays, n_samples = positions.shape[:2]
+        # grid_features = grid_features.view(n_rays * n_samples, self.n_levels, -1) # (n_rays, n_levels, feat_dim)
+
+        conditioning_codes = ray_samples.metadata["conditioning_codes"]
+        # conditioning_codes = conditioning_codes.expand(-1, n_samples, -1).reshape(
+        #     -1, conditioning_codes.shape[-1]
+        # ) # (n_rays, feat_dim)
+        # blended_features = torch.einsum("ijk,ik->ij", grid_features, conditioning_codes) # (n_rays, n_levels)
+        # grid_features = torch.cat([blended_features, conditioning_codes], dim=-1)
+
+        conditioning_codes = conditioning_codes.view(-1, 4, conditioning_codes.shape[-1] // 4)
+        grid_features, _ = self.decoder(grid_features, z=conditioning_codes) 
+        grid_features = grid_features.view(-1, self.feature_dim)
+
         if self.linear_decoder:
             density_before_activation = self.sigma_net(grid_features).view(
                 *ray_samples.frustums.shape, -1
@@ -409,6 +390,7 @@ class KPlanesDensityField(Field):
     def __init__(
         self,
         aabb: TensorType,
+        sample_code_dim: int,
         resolution: List[int],
         num_output_coords: int,
         spatial_distortion: Optional[SpatialDistortion] = None,
@@ -421,10 +403,20 @@ class KPlanesDensityField(Field):
         self.spatial_distortion = spatial_distortion
         self.has_time_planes = len(resolution) > 3
         self.feature_dim = num_output_coords
+        self.sample_code_dim = sample_code_dim
         self.linear_decoder = linear_decoder
 
         self.grids = KPlanesEncoding(
             resolution, num_output_coords, init_a=0.1, init_b=0.15
+        )
+        self.decoder = Transformer(
+            dim=self.feature_dim,
+            depth=2,
+            heads=4,
+            dim_head=16,
+            mlp_dim=16,
+            selfatt=False,
+            kv_dim=self.sample_code_dim // 4,
         )
 
         self.sigma_net = tcnn.Network(
@@ -447,17 +439,13 @@ class KPlanesDensityField(Field):
     def density_fn(
         self,
         positions: TensorType["bs":..., 3],
-        times: Optional[TensorType["bs", 1]] = None,
+        conditioning_codes: Optional[TensorType["bs", "channel"]] = None,
     ) -> TensorType["bs":..., 1]:
         """Returns only the density. Overrides base function to add times in samples
 
         Args:
             positions: the origin of the samples/frustums
-            times: the time of rays
         """
-        if times is not None and (len(positions.shape) == 3 and len(times.shape) == 2):
-            # position is [ray, sample, 3]; times is [ray, 1]
-            times = times[:, None]  # RaySamples can handle the shape
         # Need to figure out a better way to descibe positions with a ray.
         ray_samples = RaySamples(
             frustums=Frustums(
@@ -467,12 +455,13 @@ class KPlanesDensityField(Field):
                 ends=torch.zeros_like(positions[..., :1]),
                 pixel_area=torch.ones_like(positions[..., :1]),
             ),
-            times=times,
         )
-        density, _ = self.get_density(ray_samples)
+        density, _ = self.get_density(ray_samples, conditioning_codes)
         return density
 
-    def get_density(self, ray_samples: RaySamples) -> Tuple[TensorType, None]:
+    def get_density(
+        self, ray_samples: RaySamples, conditioning_codes
+    ) -> Tuple[TensorType, None]:
         """Computes and returns the densities."""
         positions = ray_samples.frustums.get_positions()
         if self.spatial_distortion is not None:
@@ -494,13 +483,26 @@ class KPlanesDensityField(Field):
                 (positions, timestamps), dim=-1
             )  # [n_rays, n_samples, 4]
 
-        positions_flat = positions.view(-1, positions.shape[-1])
-        features = interpolate_ms_features(
+        n_rays, n_samples = positions.shape[:2]
+
+        positions_flat = positions
+        # positions_flat = positions.view(-1, positions.shape[-1])
+        grid_features = interpolate_ms_features(
             positions_flat, grid_encodings=[self.grids], concat_features=False
         )
-        if len(features) < 1:
-            features = torch.zeros((0, 1), device=features.device, requires_grad=True)
-        density_before_activation = self.sigma_net(features).view(
+        # if len(features) < 1:
+        #     features = torch.zeros((0, 1), device=features.device, requires_grad=True)
+
+        # conditioning_codes = conditioning_codes.expand(-1, n_samples, -1).reshape(
+        #     -1, conditioning_codes.shape[-1]
+        # )
+        # features = torch.cat([features, conditioning_codes], dim=-1)
+
+        conditioning_codes = conditioning_codes.view(-1, 4, conditioning_codes.shape[-1] // 4)
+        grid_features, _ = self.decoder(grid_features, z=conditioning_codes) 
+        grid_features = grid_features.view(-1, self.feature_dim)
+
+        density_before_activation = self.sigma_net(grid_features).view(
             *ray_samples.frustums.shape, -1
         )
         density = trunc_exp(density_before_activation.to(positions) - 1)

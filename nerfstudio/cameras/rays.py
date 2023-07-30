@@ -124,6 +124,7 @@ class RaySamples(TensorDataclass):
 
     times: Optional[Float[Tensor, "*batch 1"]] = None
     """Times at which rays are sampled"""
+    sample_inds: Optional[Int[Tensor, "*bs 1"]] = None  # timestep per sample
 
     def get_weights(self, densities: Float[Tensor, "*batch num_samples 1"]) -> Float[Tensor, "*batch num_samples 1"]:
         """Return weights based on predicted densities
@@ -209,6 +210,8 @@ class RayBundle(TensorDataclass):
     """Additional metadata or data needed for interpolation, will mimic shape of rays"""
     times: Optional[Float[Tensor, "*batch 1"]] = None
     """Times at which rays are sampled"""
+    sample_inds: Optional[Int[Tensor, "*batch 1"]] = None
+    "Long tensor of sample_inds for each ray."
 
     def set_camera_indices(self, camera_index: int) -> None:
         """Sets all the camera indices to a specific camera index.
@@ -290,6 +293,7 @@ class RayBundle(TensorDataclass):
             spacing_to_euclidean_fn=spacing_to_euclidean_fn,
             metadata=shaped_raybundle_fields.metadata,
             times=None if self.times is None else self.times[..., None],  # [..., 1, 1]
+            sample_inds=None if self.sample_inds is None else self.sample_inds[..., None],  # [..., 1, 1]
         )
 
         return ray_samples

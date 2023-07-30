@@ -39,7 +39,7 @@ from nerfstudio.data.dataparsers.phototourism_dataparser import PhototourismData
 from nerfstudio.data.dataparsers.sdfstudio_dataparser import SDFStudioDataParserConfig
 from nerfstudio.data.dataparsers.sitcoms3d_dataparser import Sitcoms3DDataParserConfig
 from nerfstudio.data.datasets.depth_dataset import DepthDataset
-from nerfstudio.data.datasets.dnerf_dataset import DynamicDepthDataset, DynamicDataset
+from nerfstudio.data.datasets.dnerf_dataset import DynamicDepthDataset, DynamicDataset, DynamicDepthFeatureDataset
 
 
 from nerfstudio.data.datasets.sdf_dataset import SDFDataset
@@ -61,6 +61,7 @@ from nerfstudio.models.nerfacto import NerfactoModelConfig
 from nerfstudio.models.dnerfacto import DNerfactoModelConfig
 from nerfstudio.models.depth_dnerfacto import DepthDNerfactoModelConfig
 from nerfstudio.models.depth_kplanes import DepthKPlanesModelConfig
+from nerfstudio.models.depth_autodecode_kplanes import DepthAutoDecodeKPlanesModelConfig
 from kplanes.kplanes_configs import KPlanesModelConfig
 
 from nerfstudio.models.neus import NeuSModelConfig
@@ -90,6 +91,8 @@ descriptions = {
     "neus": "Implementation of NeuS. (slow)",
     "neus-facto": "Implementation of NeuS-Facto. (slow)",
     "kplane-dynamic": "Implementation of KPlanes-Dynamic.",
+    "hypernerf-clean": "Implementation of HyperNeRF-Clean.",
+    "autodecode-kplane": "Implementation of HyperNeRF-Clean.",
 }
 
 method_configs["nerfacto"] = TrainerConfig(
@@ -507,7 +510,7 @@ method_configs['kplane-dynamic-big'] = TrainerConfig(
         mixed_precision=True,
         pipeline=VanillaPipelineConfig(
             datamanager=VanillaDataManagerConfig(
-                _target=DNeRFDataManager[DynamicDepthDataset],
+                _target=DNeRFDataManager[DynamicDepthFeatureDataset],
                 dataparser=DNeRFDataParserConfig(center_method="focus", scale_factor=1.0),
                 train_num_rays_per_batch=4096,
                 eval_num_rays_per_batch=4096,
@@ -522,10 +525,10 @@ method_configs['kplane-dynamic-big'] = TrainerConfig(
             model=DepthKPlanesModelConfig(
                 eval_num_rays_per_chunk=1 << 15,
                 num_samples=64,
-                num_proposal_samples=(256, 128),
+                num_proposal_samples=(256, 256),
 
                 grid_base_resolution=[128, 128, 128, 5],  # time-resolution should be half the time-steps
-                grid_feature_dim=64,
+                grid_feature_dim=32,
 
                 multiscale_res=[1, 2, 4],
                 proposal_net_args_list=[
@@ -559,45 +562,156 @@ method_configs['kplane-dynamic-big'] = TrainerConfig(
         vis="viewer",
     )
 
-method_configs["dnerf"] = TrainerConfig(
-    method_name="dnerf",
+method_configs['autodecode-kplane'] = TrainerConfig(
+        method_name="autodecode-kplane",
+        steps_per_eval_batch=500,
+        steps_per_save=2000,
+        steps_per_eval_all_images=30000,
+        max_num_iterations=300001,
+        mixed_precision=True,
+        pipeline=VanillaPipelineConfig(
+            datamanager=VanillaDataManagerConfig(
+                _target=DNeRFDataManager[DynamicDepthDataset],
+                dataparser=DNeRFDataParserConfig(center_method="focus", scale_factor=1.0),
+                train_num_images_to_sample_from=1000,
+                eval_num_images_to_sample_from=1000,
+                train_num_rays_per_batch=4096,
+                eval_num_rays_per_batch=4096,
+                camera_optimizer=CameraOptimizerConfig(
+                    mode="SO3xR3", optimizer=AdamOptimizerConfig(lr=6e-4, eps=1e-8, weight_decay=1e-2)
+                ),
+            ),
+            model=DepthAutoDecodeKPlanesModelConfig(
+                eval_num_rays_per_chunk=1 << 15,
+                num_samples=64,
+                num_proposal_samples=(256, 256),
+
+                grid_base_resolution=[128, 128, 128],  # time-resolution should be half the time-steps
+                grid_feature_dim=64,
+
+                multiscale_res=[1] + [2, 4],
+                proposal_net_args_list=[
+                    # time-resolution should be half the time-steps
+                    {"num_output_coords": 8, "resolution": [128, 128, 128]},
+                    {"num_output_coords": 8, "resolution": [256, 256, 256]},
+                ],
+                loss_coefficients={
+                    "interlevel": 1.0,
+                    "distortion": 0.01,
+                    "plane_tv": 0.1,
+                    "plane_tv_proposal_net": 0.0001,
+                    # "l1_codes": 0.0001,
+                    # "codes_smoothness": 0.0001,
+                },
+            ),
+        ),
+        optimizers={
+            "proposal_networks": {
+                "optimizer": AdamOptimizerConfig(lr=1e-2, eps=1e-12),
+                "scheduler": CosineDecaySchedulerConfig(warm_up_end=512, max_steps=300000),
+            },
+            "fields": {
+                "optimizer": AdamOptimizerConfig(lr=1e-2, eps=1e-12),
+                "scheduler": CosineDecaySchedulerConfig(warm_up_end=512, max_steps=300000),
+            },
+            "embeddings": {
+                "optimizer": AdamOptimizerConfig(lr=5e-3, eps=1e-15, weight_decay=1e-4),
+                "scheduler": CosineDecaySchedulerConfig(warm_up_end=512, max_steps=300000),
+            },
+        },
+        # viewer=ViewerConfig(num_rays_per_chunk=1 << 15),
+        vis="wandb",
+    )
+
+from nersemble.nerfstudio.engine.step_lr_scheduler import StepLRSchedulerConfig
+from nersemble.nerfstudio.field_components.deformation_field import SE3DeformationFieldConfig
+from nersemble.nerfstudio.field_components.hash_ensemble import HashEnsembleConfig, TCNNHashEncodingConfig
+from nersemble.nerfstudio.models.nersemble_instant_ngp import NeRSembleNGPModelConfig
+
+
+method_configs["hypernerf-clean"] = TrainerConfig(
+    method_name="hypernerf-clean",
+    steps_per_eval_batch=500,
+    steps_per_save=2000,
+    steps_per_eval_all_images=30000,
+    max_num_iterations=300001,
+    mixed_precision=True,
     pipeline=VanillaPipelineConfig(
         datamanager=VanillaDataManagerConfig(
-            _target=DNeRFDataManager[DynamicDepthDataset],
-            dataparser=DNeRFDataParserConfig(center_method="focus"),
-            # dataparser=NerfstudioDataParserConfig(),
-            train_num_rays_per_batch=4096,
-            eval_num_rays_per_batch=4096,
+            _target=DNeRFDataManager[DynamicDepthFeatureDataset],
+            dataparser=DNeRFDataParserConfig(
+                center_method="focus",
+                scale_factor=1.0,
+            ),
+            train_num_rays_per_batch=1024,
+            eval_num_rays_per_batch=2048,
             camera_optimizer=CameraOptimizerConfig(
                 mode="SO3xR3", optimizer=AdamOptimizerConfig(lr=6e-4, eps=1e-8, weight_decay=1e-2)
             ),
         ),
+        model=NeRSembleNGPModelConfig(
+            n_timesteps=11, # time * num_views
+            # use_background_network=True,
+            background_color="random",
+            near_plane=0.05,
+            far_plane=100.0,
 
-        model=DepthDNerfactoModelConfig(
-            # _target=NeRFModel,
-            eval_num_rays_per_chunk=1 << 15,
-            enable_temporal_distortion=True,
-            temporal_distortion_params={"kind": TemporalDistortionKind.DNERF},
+            grid_levels=1,
+            grid_resolution=128,
+            disable_scene_contraction=True, 
+
+            # Hash Ensemble
+            use_hash_ensemble=True,
+            hash_ensemble_config=HashEnsembleConfig(
+                n_hash_encodings=4,
+                hash_encoding_config=TCNNHashEncodingConfig(),
+                disable_initial_hash_ensemble=True,
+                use_soft_transition=True
+            ),
+
+            latent_dim_time=4,
+            use_separate_deformation_time_embedding=False,
+            use_deformation_field=True,
+            deformation_field_config=SE3DeformationFieldConfig(
+                warp_code_dim=4,
+                mlp_layer_width=32,
+                mlp_num_layers=3,
+                skip_connections=(1,),
+            ), # want to check if disabling scene contraction relates to failure [@03:05; 07-28-23]
+
+            # loss
+            depth_loss_mult=1e-4,
+            lambda_dist_loss=5e-3,
+            # lambda_near_loss=1e-4,
+            # lambda_empty_loss=1e-2,
+
+            # schedule
+            # window_deform_begin=0,
+            # window_deform_end=20000,
+            # window_hash_encodings_begin=40000,
+            # window_hash_encodings_end=80000,
         ),
     ),
-
     optimizers={
-        "proposal_networks": {
-            "optimizer": AdamOptimizerConfig(lr=1e-2, eps=1e-15),
-            "scheduler": None,
-        },
         "fields": {
-            "optimizer": AdamOptimizerConfig(lr=1e-2, eps=1e-15),
-            "scheduler": None,
+            "optimizer": AdamOptimizerConfig(lr=5e-3, eps=1e-15, weight_decay=0),
+            "scheduler": StepLRSchedulerConfig(step_size=20000, gamma=8e-1)
         },
-        "temporal_distortion": {
-            "optimizer": RAdamOptimizerConfig(lr=1e-3, eps=1e-08),
-            "scheduler": None,
+        "deformation_field": {
+            "optimizer": AdamOptimizerConfig(lr=1e-3, eps=1e-15, weight_decay=0),
+            "scheduler": StepLRSchedulerConfig(step_size=20000, gamma=5e-1),
+        },
+        "embeddings": {
+            "optimizer": AdamOptimizerConfig(lr=5e-3, eps=1e-15, weight_decay=0),
+            "scheduler": StepLRSchedulerConfig(step_size=20000, gamma=8e-1),
         },
     },
     viewer=ViewerConfig(num_rays_per_chunk=1 << 15),
     vis="viewer",
+
 )
+
+
 
 method_configs["phototourism"] = TrainerConfig(
     method_name="phototourism",
