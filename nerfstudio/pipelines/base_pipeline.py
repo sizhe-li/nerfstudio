@@ -284,17 +284,11 @@ class VanillaPipeline(Pipeline):
         Args:
             step: current iteration step to update sampler if using DDP (distributed)
         """
-        tic = time()
         ray_bundle, batch = self.datamanager.next_train(step)
-        print(f"next_train took {time() - tic} seconds")
 
-        tic = time()
         model_outputs = self._model(ray_bundle)  # train distributed data parallel model if world_size > 1
-        print(f"model took {time() - tic} seconds")
 
-        tic = time()
         metrics_dict = self.model.get_metrics_dict(model_outputs, batch)
-        print(f"metrics_dict took {time() - tic} seconds")
 
         if self.config.datamanager.camera_optimizer is not None:
             camera_opt_param_group = self.config.datamanager.camera_optimizer.param_group
@@ -307,9 +301,7 @@ class VanillaPipeline(Pipeline):
                     self.datamanager.get_param_groups()[camera_opt_param_group][0].data[:, 3:].norm()
                 )
 
-        tic = time()
         loss_dict = self.model.get_loss_dict(model_outputs, batch, metrics_dict)
-        print(f"loss_dict took {time() - tic} seconds")
 
         return model_outputs, loss_dict, metrics_dict
 
