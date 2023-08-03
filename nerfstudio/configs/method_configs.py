@@ -583,7 +583,7 @@ method_configs['autodecode-kplane'] = TrainerConfig(
                 eval_num_images_to_sample_from=1000,
                 train_num_times_to_repeat_images=1000,
                 eval_num_times_to_repeat_images=1000,
-                train_num_rays_per_batch=1024
+                train_num_rays_per_batch=1024,
                 eval_num_rays_per_batch=2048,
                 camera_optimizer=CameraOptimizerConfig(
                     mode="SO3xR3", optimizer=AdamOptimizerConfig(lr=6e-4, eps=1e-8, weight_decay=1e-2)
