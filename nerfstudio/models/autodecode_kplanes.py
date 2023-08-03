@@ -22,6 +22,7 @@ import functools
 from dataclasses import dataclass, field
 from typing import Dict, List, Optional, Tuple, Type
 
+from time import time
 import math
 import numpy as np
 import torch
@@ -329,22 +330,29 @@ class KPlanesModel(Model):
     def get_outputs(self, ray_bundle: RayBundle):
         density_fns = self.density_fns
 
+        tic = time()
         conditioning_codes = self.sample_embedding(ray_bundle.sample_inds)
+        print("embedding time: ", time() - tic)
 
         density_fns = [
             functools.partial(f, conditioning_codes=conditioning_codes)
             for f in density_fns
         ]
 
+        tic = time()
         ray_samples: RaySamples
         ray_samples, weights_list, ray_samples_list = self.proposal_sampler(
             ray_bundle, density_fns=density_fns
         )
+        print("proposal time: ", time() - tic)
 
+        tic = time()
         ray_samples.metadata['conditioning_codes'] = conditioning_codes
         field_outputs = self.field(ray_samples)
+        print("field time: ", time() - tic)
 
 
+        tic = time()
         # flatten ray samples and make ray indices
         # ray_samples = ray_samples.flatten()
         num_rays = len(ray_bundle)
@@ -375,6 +383,7 @@ class KPlanesModel(Model):
             ray_indices=ray_indices,
             num_rays=num_rays,
         )
+        print("render time: ", time() - tic)
         # import pdb; pdb.set_trace()
 
         # weights = y_samples.get_weights(field_outputs[FieldHeadNames.DENSITY])
