@@ -564,8 +564,8 @@ method_configs['kplane-dynamic-big'] = TrainerConfig(
 
 method_configs['autodecode-kplane'] = TrainerConfig(
         method_name="autodecode-kplane",
-        steps_per_eval_batch=500,
-        steps_per_save=2000,
+        steps_per_eval_batch=1000,
+        steps_per_save=10000,
         steps_per_eval_all_images=30000,
         max_num_iterations=300001,
         mixed_precision=True,
@@ -573,10 +573,18 @@ method_configs['autodecode-kplane'] = TrainerConfig(
             datamanager=VanillaDataManagerConfig(
                 _target=DNeRFDataManager[DynamicDepthDataset],
                 dataparser=DNeRFDataParserConfig(center_method="focus", scale_factor=1.0),
+                # train_num_images_to_sample_from=-1,
+                # eval_num_images_to_sample_from=-1,
+                # train_num_images_to_sample_from=1000,
+                # eval_num_images_to_sample_from=1000,
+                # train_num_times_to_repeat_images=100,
+                # eval_num_times_to_repeat_images=100,
                 train_num_images_to_sample_from=1000,
                 eval_num_images_to_sample_from=1000,
-                train_num_rays_per_batch=4096,
-                eval_num_rays_per_batch=4096,
+                train_num_times_to_repeat_images=1000,
+                eval_num_times_to_repeat_images=1000,
+                train_num_rays_per_batch=1024,
+                eval_num_rays_per_batch=2048,
                 camera_optimizer=CameraOptimizerConfig(
                     mode="SO3xR3", optimizer=AdamOptimizerConfig(lr=6e-4, eps=1e-8, weight_decay=1e-2)
                 ),
@@ -587,7 +595,7 @@ method_configs['autodecode-kplane'] = TrainerConfig(
                 num_proposal_samples=(256, 256),
 
                 grid_base_resolution=[128, 128, 128],  # time-resolution should be half the time-steps
-                grid_feature_dim=64,
+                grid_feature_dim=32,
 
                 multiscale_res=[1] + [2, 4],
                 proposal_net_args_list=[
@@ -607,20 +615,20 @@ method_configs['autodecode-kplane'] = TrainerConfig(
         ),
         optimizers={
             "proposal_networks": {
-                "optimizer": AdamOptimizerConfig(lr=1e-2, eps=1e-12),
+                "optimizer": AdamOptimizerConfig(lr=1e-3, eps=1e-12),
                 "scheduler": CosineDecaySchedulerConfig(warm_up_end=512, max_steps=300000),
             },
             "fields": {
-                "optimizer": AdamOptimizerConfig(lr=1e-2, eps=1e-12),
+                "optimizer": AdamOptimizerConfig(lr=1e-3, eps=1e-12),
                 "scheduler": CosineDecaySchedulerConfig(warm_up_end=512, max_steps=300000),
             },
             "embeddings": {
-                "optimizer": AdamOptimizerConfig(lr=5e-3, eps=1e-15, weight_decay=1e-4),
+                "optimizer": AdamOptimizerConfig(lr=5e-4, eps=1e-15, weight_decay=1e-4),
                 "scheduler": CosineDecaySchedulerConfig(warm_up_end=512, max_steps=300000),
             },
         },
-        # viewer=ViewerConfig(num_rays_per_chunk=1 << 15),
-        vis="wandb",
+        viewer=ViewerConfig(num_rays_per_chunk=1 << 15),
+        vis="viewer",
     )
 
 from nersemble.nerfstudio.engine.step_lr_scheduler import StepLRSchedulerConfig
@@ -638,20 +646,18 @@ method_configs["hypernerf-clean"] = TrainerConfig(
     mixed_precision=True,
     pipeline=VanillaPipelineConfig(
         datamanager=VanillaDataManagerConfig(
-            _target=DNeRFDataManager[DynamicDepthFeatureDataset],
+            _target=DNeRFDataManager[DynamicDepthDataset],
             dataparser=DNeRFDataParserConfig(
                 center_method="focus",
                 scale_factor=1.0,
             ),
-            train_num_rays_per_batch=1024,
+            train_num_rays_per_batch=512,
             eval_num_rays_per_batch=2048,
             camera_optimizer=CameraOptimizerConfig(
                 mode="SO3xR3", optimizer=AdamOptimizerConfig(lr=6e-4, eps=1e-8, weight_decay=1e-2)
             ),
         ),
         model=NeRSembleNGPModelConfig(
-            n_timesteps=11, # time * num_views
-            # use_background_network=True,
             background_color="random",
             near_plane=0.05,
             far_plane=100.0,
@@ -683,7 +689,7 @@ method_configs["hypernerf-clean"] = TrainerConfig(
             depth_loss_mult=1e-4,
             lambda_dist_loss=5e-3,
             # lambda_near_loss=1e-4,
-            # lambda_empty_loss=1e-2,
+            lambda_empty_loss=1e-3,
 
             # schedule
             # window_deform_begin=0,

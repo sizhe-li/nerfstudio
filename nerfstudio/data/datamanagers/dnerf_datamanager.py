@@ -564,7 +564,8 @@ class DNeRFDataManager(DataManager, Generic[TDataset]):
         ray_indices[..., 0] = sample_to_camera_idx[ray_indices[..., 0]]
 
         # (2) Provide times encodings
-        times = batch["times"]
+        # times = batch["times"]
+        times = None
 
         # (3) Provide sample indices
         sample_inds = batch["sample_inds"]
@@ -583,8 +584,24 @@ class DNeRFDataManager(DataManager, Generic[TDataset]):
         assert self.eval_pixel_sampler is not None
         assert isinstance(image_batch, dict)
         batch = self.eval_pixel_sampler.sample(image_batch)
+
         ray_indices = batch["indices"]
-        ray_bundle = self.eval_ray_generator(ray_indices)
+
+        # (1) Map sample indices to camera indices
+        sample_to_camera_idx = self.train_dataparser_outputs.sample_to_camera_idx
+        ray_indices[..., 0] = sample_to_camera_idx[ray_indices[..., 0]]
+
+        # (2) Provide times encodings
+        # times = batch["times"]
+        times = None
+
+        # (3) Provide sample indices
+        sample_inds = batch["sample_inds"]
+        # import pdb; pdb.set_trace()
+
+        ray_bundle = self.train_ray_generator.forward(
+            ray_indices, times=times, sample_inds=sample_inds
+        )
         return ray_bundle, batch
 
     def next_eval_image(self, step: int) -> Tuple[int, RayBundle, Dict]:

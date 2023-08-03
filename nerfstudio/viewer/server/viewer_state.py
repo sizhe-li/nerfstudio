@@ -322,7 +322,7 @@ class ViewerState:
         else:
             camera_type = CameraType.PERSPECTIVE
 
-        n_samples = self.trainer.pipeline.model.n_samples
+        n_samples = self.pipeline.model.n_samples
 
         camera = Cameras(
             fx=intrinsics_matrix[0, 0],

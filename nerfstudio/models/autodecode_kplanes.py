@@ -26,6 +26,7 @@ import math
 import numpy as np
 import torch
 import torch.nn as nn
+import nerfacc
 from torch.nn import Parameter
 from torchmetrics import PeakSignalNoiseRatio
 from torchmetrics.functional import structural_similarity_index_measure
@@ -272,7 +273,7 @@ class KPlanesModel(Model):
         # renderers
         self.renderer_rgb = RGBRenderer(background_color=self.config.background_color)
         self.renderer_accumulation = AccumulationRenderer()
-        self.renderer_depth = DepthRenderer()
+        self.renderer_depth = DepthRenderer(method="expected")
         self.renderer_features = FeatureRenderer()
 
         # losses
@@ -343,16 +344,52 @@ class KPlanesModel(Model):
         ray_samples.metadata['conditioning_codes'] = conditioning_codes
         field_outputs = self.field(ray_samples)
 
-        weights = ray_samples.get_weights(field_outputs[FieldHeadNames.DENSITY])
-        weights_list.append(weights)
+
+        # flatten ray samples and make ray indices
+        # ray_samples = ray_samples.flatten()
+        num_rays = len(ray_bundle)
+        ray_indices = torch.arange(num_rays, device=ray_bundle.origins.device)
+        ray_indices = torch.repeat_interleave(ray_indices, ray_samples.shape[1])
+
+        ray_samples.frustums.starts = ray_samples.frustums.starts.reshape(-1, 1)
+        ray_samples.frustums.ends = ray_samples.frustums.ends.reshape(-1, 1)
+
+        packed_info = nerfacc.pack_info(ray_indices, num_rays)
+        weights = nerfacc.render_weight_from_density(
+            t_starts=ray_samples.frustums.starts[..., 0],
+            t_ends=ray_samples.frustums.ends[..., 0],
+            sigmas=field_outputs[FieldHeadNames.DENSITY][..., 0].view(-1),
+            packed_info=packed_info,
+        )[0]
+        weights = weights[..., None]
+
+        rgb = self.renderer_rgb(
+            rgb=field_outputs[FieldHeadNames.RGB].view(-1, 3),
+            weights=weights,
+            ray_indices=ray_indices,
+            num_rays=num_rays,
+        )
+        depth = self.renderer_depth(
+            weights=weights,
+            ray_samples=ray_samples,
+            ray_indices=ray_indices,
+            num_rays=num_rays,
+        )
+        # import pdb; pdb.set_trace()
+
+        # weights = y_samples.get_weights(field_outputs[FieldHeadNames.DENSITY])
+
+        weights_list.append(weights.reshape(num_rays, -1, 1))
         ray_samples_list.append(ray_samples)
 
-        rgb = self.renderer_rgb(rgb=field_outputs[FieldHeadNames.RGB], weights=weights)
+        ray_samples.frustums.starts = ray_samples.frustums.starts.reshape(num_rays, -1, 1)
+        ray_samples.frustums.ends = ray_samples.frustums.ends.reshape(num_rays, -1, 1)
+
+        # rgb = self.renderer_rgb(rgb=field_outputs[FieldHeadNames.RGB], weights=weights)
         # dense_features = self.renderer_rgb(
         #     rgb=field_outputs["dense_features"], weights=weights
         # )
-
-        depth = self.renderer_depth(weights=weights, ray_samples=ray_samples)
+        # depth = self.renderer_depth(weights=weights, ray_samples=ray_samples)
 
         steps = (ray_samples.frustums.starts + ray_samples.frustums.ends) / 2
         outputs = {
@@ -373,6 +410,14 @@ class KPlanesModel(Model):
                 weights=weights_list[i], ray_samples=ray_samples_list[i]
             )
 
+        prop_grids = [p.grids.plane_coefs for p in self.proposal_networks]
+        field_grids = [g.plane_coefs for g in self.field.grids]
+
+        outputs["plane_tv"] = space_tv_loss(field_grids)
+        outputs["plane_tv_proposal_net"] = space_tv_loss(prop_grids)
+
+
+
         return outputs
 
     def get_metrics_dict(self, outputs, batch):
@@ -387,11 +432,14 @@ class KPlanesModel(Model):
                 outputs["weights_list"], outputs["ray_samples_list"]
             )
 
-            prop_grids = [p.grids.plane_coefs for p in self.proposal_networks]
-            field_grids = [g.plane_coefs for g in self.field.grids]
+            metrics_dict["plane_tv"] = outputs["plane_tv"]
+            metrics_dict["plane_tv_proposal_net"] = outputs["plane_tv_proposal_net"]
 
-            metrics_dict["plane_tv"] = space_tv_loss(field_grids)
-            metrics_dict["plane_tv_proposal_net"] = space_tv_loss(prop_grids)
+            # prop_grids = [p.grids.plane_coefs for p in self.proposal_networks]
+            # field_grids = [g.plane_coefs for g in self.field.grids]
+
+            # metrics_dict["plane_tv"] = space_tv_loss(field_grids)
+            # metrics_dict["plane_tv_proposal_net"] = space_tv_loss(prop_grids)
 
             # metrics_dict["l1_codes"] = torch.abs(1 - self.sample_embedding.weight).mean()
 

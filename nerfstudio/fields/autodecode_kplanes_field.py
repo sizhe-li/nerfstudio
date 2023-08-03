@@ -149,10 +149,10 @@ class KPlanesField(Field):
         
         self.decoder = Transformer(
             dim=self.feature_dim,
-            depth=3,
+            depth=2,
             heads=8,
             dim_head=16,
-            mlp_dim=64,
+            mlp_dim=32,
             selfatt=False,
             kv_dim=self.sample_code_dim // 4,
         )
@@ -414,7 +414,7 @@ class KPlanesDensityField(Field):
             depth=2,
             heads=4,
             dim_head=16,
-            mlp_dim=16,
+            mlp_dim=32,
             selfatt=False,
             kv_dim=self.sample_code_dim // 4,
         )
