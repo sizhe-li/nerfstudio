@@ -30,6 +30,7 @@ from nerfstudio.configs.external_methods import get_external_methods
 from nerfstudio.data.datamanagers.random_cameras_datamanager import RandomCamerasDataManagerConfig
 from nerfstudio.data.datamanagers.base_datamanager import VanillaDataManager, VanillaDataManagerConfig
 from nerfstudio.data.datamanagers.dnerf_datamanager import DNeRFDataManager
+from nerfstudio.data.datamanagers.dnerf_datamanager_fast import DNeRFDataManagerFast
 
 from nerfstudio.data.dataparsers.blender_dataparser import BlenderDataParserConfig
 from nerfstudio.data.dataparsers.dnerf_dataparser import DNeRFDataParserConfig
@@ -40,6 +41,7 @@ from nerfstudio.data.dataparsers.sdfstudio_dataparser import SDFStudioDataParser
 from nerfstudio.data.dataparsers.sitcoms3d_dataparser import Sitcoms3DDataParserConfig
 from nerfstudio.data.datasets.depth_dataset import DepthDataset
 from nerfstudio.data.datasets.dnerf_dataset import DynamicDepthDataset, DynamicDataset, DynamicDepthFeatureDataset
+from nerfstudio.data.datasets.dnerf_dataset_fast import DynamicDepthDatasetFast, DynamicDatasetFast, DynamicDepthFeatureDatasetFast
 
 
 from nerfstudio.data.datasets.sdf_dataset import SDFDataset
@@ -567,26 +569,23 @@ method_configs['autodecode-kplane'] = TrainerConfig(
         steps_per_eval_batch=1000,
         steps_per_save=10000,
         steps_per_eval_all_images=30000,
-        max_num_iterations=300001,
+        max_num_iterations=3000001,
         mixed_precision=True,
         pipeline=VanillaPipelineConfig(
             datamanager=VanillaDataManagerConfig(
-                _target=DNeRFDataManager[DynamicDepthDataset],
+                _target=DNeRFDataManagerFast[DynamicDepthDatasetFast],
                 dataparser=DNeRFDataParserConfig(center_method="focus", scale_factor=1.0),
                 # train_num_images_to_sample_from=-1,
                 # eval_num_images_to_sample_from=-1,
-                # train_num_images_to_sample_from=1000,
-                # eval_num_images_to_sample_from=1000,
-                # train_num_times_to_repeat_images=100,
-                # eval_num_times_to_repeat_images=100,
-                train_num_images_to_sample_from=1000,
-                eval_num_images_to_sample_from=1000,
-                train_num_times_to_repeat_images=1000,
+                train_num_images_to_sample_from=100,
+                eval_num_images_to_sample_from=100,
+                train_num_times_to_repeat_images=1,
                 eval_num_times_to_repeat_images=1000,
-                train_num_rays_per_batch=1024,
+                train_num_rays_per_batch=2048,
                 eval_num_rays_per_batch=2048,
                 camera_optimizer=CameraOptimizerConfig(
-                    mode="SO3xR3", optimizer=AdamOptimizerConfig(lr=6e-4, eps=1e-8, weight_decay=1e-2)
+                    mode="off",
+                    # mode="SO3xR3", optimizer=AdamOptimizerConfig(lr=6e-4, eps=1e-8, weight_decay=1e-2)
                 ),
             ),
             model=DepthAutoDecodeKPlanesModelConfig(
@@ -651,7 +650,11 @@ method_configs["hypernerf-clean"] = TrainerConfig(
                 center_method="focus",
                 scale_factor=1.0,
             ),
-            train_num_rays_per_batch=512,
+            train_num_images_to_sample_from=1000,
+            eval_num_images_to_sample_from=1000,
+            train_num_times_to_repeat_images=1000,
+            eval_num_times_to_repeat_images=1000,
+            train_num_rays_per_batch=1024,
             eval_num_rays_per_batch=2048,
             camera_optimizer=CameraOptimizerConfig(
                 mode="SO3xR3", optimizer=AdamOptimizerConfig(lr=6e-4, eps=1e-8, weight_decay=1e-2)
@@ -660,7 +663,7 @@ method_configs["hypernerf-clean"] = TrainerConfig(
         model=NeRSembleNGPModelConfig(
             background_color="random",
             near_plane=0.05,
-            far_plane=100.0,
+            far_plane=500.0,
 
             grid_levels=1,
             grid_resolution=128,
@@ -677,7 +680,7 @@ method_configs["hypernerf-clean"] = TrainerConfig(
 
             latent_dim_time=4,
             use_separate_deformation_time_embedding=False,
-            use_deformation_field=True,
+            use_deformation_field=False,
             deformation_field_config=SE3DeformationFieldConfig(
                 warp_code_dim=4,
                 mlp_layer_width=32,
@@ -689,7 +692,7 @@ method_configs["hypernerf-clean"] = TrainerConfig(
             depth_loss_mult=1e-4,
             lambda_dist_loss=5e-3,
             # lambda_near_loss=1e-4,
-            lambda_empty_loss=1e-3,
+            # lambda_empty_loss=1e-3,
 
             # schedule
             # window_deform_begin=0,

@@ -285,7 +285,7 @@ class KPlanesField(Field):
         # grid_features = torch.cat([blended_features, conditioning_codes], dim=-1)
 
         conditioning_codes = conditioning_codes.view(-1, 4, conditioning_codes.shape[-1] // 4)
-        grid_features, _ = self.decoder(grid_features, z=conditioning_codes) 
+        grid_features, layers_act = self.decoder(grid_features, z=conditioning_codes, get_layer_act=True) 
         grid_features = grid_features.view(-1, self.feature_dim)
 
         if self.linear_decoder:
@@ -307,7 +307,7 @@ class KPlanesField(Field):
         # softplus, because it enables high post-activation (float32) density outputs
         # from smaller internal (float16) parameters.
         density = trunc_exp(density_before_activation.to(positions) - 1)
-        return density, torch.cat([features, ndf_features], dim=-1)
+        return density, torch.cat([features, ndf_features, layers_act.view(*ray_samples.frustums.shape, -1)], dim=-1)
 
     def get_outputs(
         self, ray_samples: RaySamples, density_embedding: Optional[TensorType] = None

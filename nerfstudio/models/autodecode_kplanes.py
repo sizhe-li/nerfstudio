@@ -173,9 +173,8 @@ class KPlanesModel(Model):
             scene_contraction = SceneContraction(order=float("inf"))
         else:
             scene_contraction = None
-    
-        self.n_samples = self.kwargs["metadata"]["sample_inds"].max() + 1
 
+        self.n_samples = self.kwargs["metadata"]["sample_inds"].max() + 1
 
         self.sample_embedding = nn.Embedding(
             self.n_samples, self.config.grid_feature_dim
@@ -330,6 +329,9 @@ class KPlanesModel(Model):
         density_fns = self.density_fns
 
         conditioning_codes = self.sample_embedding(ray_bundle.sample_inds)
+        if not self.training:
+            if "conditioning_codes" in ray_bundle.metadata:
+                conditioning_codes = ray_bundle.metadata["conditioning_codes"]
 
         density_fns = [
             functools.partial(f, conditioning_codes=conditioning_codes)
@@ -341,9 +343,8 @@ class KPlanesModel(Model):
             ray_bundle, density_fns=density_fns
         )
 
-        ray_samples.metadata['conditioning_codes'] = conditioning_codes
+        ray_samples.metadata["conditioning_codes"] = conditioning_codes
         field_outputs = self.field(ray_samples)
-
 
         # flatten ray samples and make ray indices
         # ray_samples = ray_samples.flatten()
@@ -382,14 +383,15 @@ class KPlanesModel(Model):
         weights_list.append(weights.reshape(num_rays, -1, 1))
         ray_samples_list.append(ray_samples)
 
-        ray_samples.frustums.starts = ray_samples.frustums.starts.reshape(num_rays, -1, 1)
+        ray_samples.frustums.starts = ray_samples.frustums.starts.reshape(
+            num_rays, -1, 1
+        )
         ray_samples.frustums.ends = ray_samples.frustums.ends.reshape(num_rays, -1, 1)
 
-        # rgb = self.renderer_rgb(rgb=field_outputs[FieldHeadNames.RGB], weights=weights)
-        # dense_features = self.renderer_rgb(
-        #     rgb=field_outputs["dense_features"], weights=weights
-        # )
-        # depth = self.renderer_depth(weights=weights, ray_samples=ray_samples)
+        ndf_features = self.renderer_features(
+            features=field_outputs["ndf_features"], 
+            weights=weights_list[-1],
+        )
 
         steps = (ray_samples.frustums.starts + ray_samples.frustums.ends) / 2
         outputs = {
@@ -397,7 +399,7 @@ class KPlanesModel(Model):
             "depth": depth,
             "weights": weights,
             "steps": steps,
-            # "dense_features": dense_features,
+            "ndf_features": ndf_features,
         }
 
         # These use a lot of GPU memory, so we avoid storing them for eval.
@@ -415,8 +417,6 @@ class KPlanesModel(Model):
 
         outputs["plane_tv"] = space_tv_loss(field_grids)
         outputs["plane_tv_proposal_net"] = space_tv_loss(prop_grids)
-
-
 
         return outputs
 

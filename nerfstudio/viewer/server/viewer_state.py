@@ -29,6 +29,7 @@ from nerfstudio.cameras.cameras import Cameras, CameraType
 from nerfstudio.configs import base_config as cfg
 from nerfstudio.data.datasets.base_dataset import InputDataset
 from nerfstudio.data.datasets.dnerf_dataset import DynamicDataset
+from nerfstudio.data.datasets.dnerf_dataset_fast import DynamicDatasetFast
 from nerfstudio.data.scene_box import SceneBox
 from nerfstudio.models.base_model import Model
 from nerfstudio.pipelines.base_pipeline import Pipeline
@@ -369,12 +370,12 @@ class ViewerState:
         # draw the training cameras and images
         image_indices = self._pick_drawn_image_idxs(len(dataset))
         for idx in image_indices:
-            if isinstance(dataset, DynamicDataset):
+            if isinstance(dataset, DynamicDataset) or isinstance(dataset, DynamicDatasetFast):
                 camera_idx = dataset._dataparser_outputs.sample_to_camera_idx[idx].item()
             else:
                 camera_idx = idx
 
-            image = dataset[idx]["image"]
+            image = dataset.get_image(idx)
             bgr = image[..., [2, 1, 0]]
             camera_json = dataset.cameras.to_json(camera_idx=camera_idx, image=bgr, max_size=100)
             self.viser_server.add_dataset_image(idx=f"{idx:06d}", json=camera_json)
