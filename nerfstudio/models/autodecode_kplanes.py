@@ -54,6 +54,10 @@ from nerfstudio.model_components.renderers import (
     RGBRenderer,
     FeatureRenderer,
 )
+from nerfstudio.model_components.autodecode_ray_samplers import (
+    AutoDecodeVolumetricSampler,
+    DensityFn,
+)
 from nerfstudio.model_components.scene_colliders import NearFarCollider
 from nerfstudio.models.base_model import Model, ModelConfig
 from nerfstudio.utils import colormaps, misc
@@ -156,6 +160,19 @@ class KPlanesModelConfig(ModelConfig):
     )
     """Loss coefficients."""
 
+    use_occupancy_grid: bool = False
+    """ Whether to use occupancy grid for rendering. """
+    occ_grid_resolution: int = 128
+    """Resolution of the grid used for the field."""
+    occ_grid_levels: int = 1
+    """Levels of the grid used for the field."""
+    occ_step_size: Optional[float] = None
+    """Minimum step size for rendering."""
+    alpha_thre: float = 0.01
+    """Threshold for opacity skipping."""
+    cone_angle: float = 0.004
+    """Should be set to 0.0 for blender scenes but 1./256 for real scenes."""
+
 
 class KPlanesModel(Model):
     config: KPlanesModelConfig
@@ -201,29 +218,37 @@ class KPlanesModel(Model):
             linear_decoder_layers=self.config.linear_decoder_layers,
         )
 
-        self.density_fns = []
-        num_prop_nets = self.config.num_proposal_iterations
-        # Build the proposal network(s)
-        self.proposal_networks = torch.nn.ModuleList()
-        if self.config.use_same_proposal_network:
-            assert (
-                len(self.config.proposal_net_args_list) == 1
-            ), "Only one proposal network is allowed."
-            prop_net_args = self.config.proposal_net_args_list[0]
-            network = KPlanesDensityField(
-                self.scene_box.aabb,
-                spatial_distortion=scene_contraction,
-                linear_decoder=self.config.linear_decoder,
-                sample_code_dim=self.config.grid_feature_dim,
-                **prop_net_args,
+        if self.config.use_occupancy_grid:
+            self.scene_aabb = Parameter(
+                self.scene_box.aabb.flatten(), requires_grad=False
             )
-            self.proposal_networks.append(network)
-            self.density_fns.extend([network.density_fn for _ in range(num_prop_nets)])
+
+            if self.config.occ_step_size is None:
+                # auto step size: ~1000 samples in the base level grid
+                self.config.occ_step_size = (
+                    (self.scene_aabb[3:] - self.scene_aabb[:3]) ** 2
+                ).sum().sqrt().item() / 1000
+
+            self.occupancy_grid = nerfacc.OccGridEstimator(
+                roi_aabb=self.scene_aabb,
+                resolution=self.config.occ_grid_resolution,
+                levels=self.config.occ_grid_levels,
+            )
+
+            self.sampler = AutoDecodeVolumetricSampler(
+                occupancy_grid=self.occupancy_grid,
+                density_fn=self.field.density_fn,
+            )
         else:
-            for i in range(num_prop_nets):
-                prop_net_args = self.config.proposal_net_args_list[
-                    min(i, len(self.config.proposal_net_args_list) - 1)
-                ]
+            self.density_fns = []
+            num_prop_nets = self.config.num_proposal_iterations
+            # Build the proposal network(s)
+            self.proposal_networks = torch.nn.ModuleList()
+            if self.config.use_same_proposal_network:
+                assert (
+                    len(self.config.proposal_net_args_list) == 1
+                ), "Only one proposal network is allowed."
+                prop_net_args = self.config.proposal_net_args_list[0]
                 network = KPlanesDensityField(
                     self.scene_box.aabb,
                     spatial_distortion=scene_contraction,
@@ -232,37 +257,55 @@ class KPlanesModel(Model):
                     **prop_net_args,
                 )
                 self.proposal_networks.append(network)
-            self.density_fns.extend(
-                [network.density_fn for network in self.proposal_networks]
-            )
+                self.density_fns.extend(
+                    [network.density_fn for _ in range(num_prop_nets)]
+                )
+            else:
+                for i in range(num_prop_nets):
+                    prop_net_args = self.config.proposal_net_args_list[
+                        min(i, len(self.config.proposal_net_args_list) - 1)
+                    ]
+                    network = KPlanesDensityField(
+                        self.scene_box.aabb,
+                        spatial_distortion=scene_contraction,
+                        linear_decoder=self.config.linear_decoder,
+                        sample_code_dim=self.config.grid_feature_dim,
+                        **prop_net_args,
+                    )
+                    self.proposal_networks.append(network)
+                self.density_fns.extend(
+                    [network.density_fn for network in self.proposal_networks]
+                )
 
-        # Samplers
-        def update_schedule(step):
-            return np.clip(
-                np.interp(
-                    step,
-                    [0, self.config.proposal_warmup],
-                    [0, self.config.proposal_update_every],
-                ),
-                1,
-                self.config.proposal_update_every,
-            )
+            # Samplers
+            def update_schedule(step):
+                return np.clip(
+                    np.interp(
+                        step,
+                        [0, self.config.proposal_warmup],
+                        [0, self.config.proposal_update_every],
+                    ),
+                    1,
+                    self.config.proposal_update_every,
+                )
 
-        if self.config.is_contracted:
-            initial_sampler = UniformLinDispPiecewiseSampler(
-                single_jitter=self.config.single_jitter
-            )
-        else:
-            initial_sampler = UniformSampler(single_jitter=self.config.single_jitter)
+            if self.config.is_contracted:
+                initial_sampler = UniformLinDispPiecewiseSampler(
+                    single_jitter=self.config.single_jitter
+                )
+            else:
+                initial_sampler = UniformSampler(
+                    single_jitter=self.config.single_jitter
+                )
 
-        self.proposal_sampler = ProposalNetworkSampler(
-            num_nerf_samples_per_ray=self.config.num_samples,
-            num_proposal_samples_per_ray=self.config.num_proposal_samples,
-            num_proposal_network_iterations=self.config.num_proposal_iterations,
-            single_jitter=self.config.single_jitter,
-            update_sched=update_schedule,
-            initial_sampler=initial_sampler,
-        )
+            self.proposal_sampler = ProposalNetworkSampler(
+                num_nerf_samples_per_ray=self.config.num_samples,
+                num_proposal_samples_per_ray=self.config.num_proposal_samples,
+                num_proposal_network_iterations=self.config.num_proposal_iterations,
+                single_jitter=self.config.single_jitter,
+                update_sched=update_schedule,
+                initial_sampler=initial_sampler,
+            )
 
         # Collider
         self.collider = NearFarCollider(
@@ -288,74 +331,120 @@ class KPlanesModel(Model):
 
     def get_param_groups(self) -> Dict[str, List[Parameter]]:
         param_groups = {
-            "proposal_networks": list(self.proposal_networks.parameters()),
             "fields": list(self.field.parameters()),
             "embeddings": list(self.sample_embedding.parameters()),
         }
+        if not self.config.use_occupancy_grid:
+            param_groups["proposal_networks"] = list(
+                self.proposal_networks.parameters()
+            )
+
         return param_groups
 
     def get_training_callbacks(
         self, training_callback_attributes: TrainingCallbackAttributes
     ) -> List[TrainingCallback]:
         callbacks = []
-        if self.config.use_proposal_weight_anneal:
-            # anneal the weights of the proposal network before doing PDF sampling
-            N = self.config.proposal_weights_anneal_max_num_iters
+        if self.config.use_occupancy_grid:
 
-            def set_anneal(step):
-                # https://arxiv.org/pdf/2111.12077.pdf eq. 18
-                train_frac = np.clip(step / N, 0, 1)
-                bias = lambda x, b: (b * x) / ((b - 1) * x + 1)
-                anneal = bias(train_frac, self.config.proposal_weights_anneal_slope)
-                self.proposal_sampler.set_anneal(anneal)
+            def update_occupancy_grid(step: int):
+                def occ_eval_fn(x):
+                    sample_inds = torch.randint(
+                        0, self.n_samples, (x.shape[0],), device=x.device
+                    )
+                    conditioning_codes = self.sample_embedding(sample_inds)
+                    density = self.config.occ_step_size * self.field.density_fn(
+                        x, conditioning_codes=conditioning_codes
+                    )
+                    return density
+
+                self.occupancy_grid.update_every_n_steps(
+                    step=step,
+                    occ_eval_fn=occ_eval_fn,
+                    ema_decay=0.99,
+                )
 
             callbacks.append(
                 TrainingCallback(
                     where_to_run=[TrainingCallbackLocation.BEFORE_TRAIN_ITERATION],
                     update_every_num_iters=1,
-                    func=set_anneal,
+                    func=update_occupancy_grid,
                 )
             )
-            callbacks.append(
-                TrainingCallback(
-                    where_to_run=[TrainingCallbackLocation.AFTER_TRAIN_ITERATION],
-                    update_every_num_iters=1,
-                    func=self.proposal_sampler.step_cb,
+        else:
+            if self.config.use_proposal_weight_anneal:
+                # anneal the weights of the proposal network before doing PDF sampling
+                N = self.config.proposal_weights_anneal_max_num_iters
+
+                def set_anneal(step):
+                    # https://arxiv.org/pdf/2111.12077.pdf eq. 18
+                    train_frac = np.clip(step / N, 0, 1)
+                    bias = lambda x, b: (b * x) / ((b - 1) * x + 1)
+                    anneal = bias(train_frac, self.config.proposal_weights_anneal_slope)
+                    self.proposal_sampler.set_anneal(anneal)
+
+                callbacks.append(
+                    TrainingCallback(
+                        where_to_run=[TrainingCallbackLocation.BEFORE_TRAIN_ITERATION],
+                        update_every_num_iters=1,
+                        func=set_anneal,
+                    )
                 )
-            )
+                callbacks.append(
+                    TrainingCallback(
+                        where_to_run=[TrainingCallbackLocation.AFTER_TRAIN_ITERATION],
+                        update_every_num_iters=1,
+                        func=self.proposal_sampler.step_cb,
+                    )
+                )
+
         return callbacks
 
     def get_outputs(self, ray_bundle: RayBundle):
-        density_fns = self.density_fns
-
         conditioning_codes = self.sample_embedding(ray_bundle.sample_inds)
         if not self.training:
             if "conditioning_codes" in ray_bundle.metadata:
                 conditioning_codes = ray_bundle.metadata["conditioning_codes"]
 
-        density_fns = [
-            functools.partial(f, conditioning_codes=conditioning_codes)
-            for f in density_fns
-        ]
-
-        ray_samples: RaySamples
-        ray_samples, weights_list, ray_samples_list = self.proposal_sampler(
-            ray_bundle, density_fns=density_fns
-        )
-
-        ray_samples.metadata["conditioning_codes"] = conditioning_codes
-        field_outputs = self.field(ray_samples)
-
-        # flatten ray samples and make ray indices
-        # ray_samples = ray_samples.flatten()
         num_rays = len(ray_bundle)
-        ray_indices = torch.arange(num_rays, device=ray_bundle.origins.device)
-        ray_indices = torch.repeat_interleave(ray_indices, ray_samples.shape[1])
 
-        ray_samples.frustums.starts = ray_samples.frustums.starts.reshape(-1, 1)
-        ray_samples.frustums.ends = ray_samples.frustums.ends.reshape(-1, 1)
+        weights_list = []
+        ray_samples_list = []
+        if self.config.use_occupancy_grid:
+            ray_bundle.metadata["conditioning_codes"] = conditioning_codes
+            with torch.no_grad():
+                ray_samples, ray_indices = self.sampler(
+                    ray_bundle=ray_bundle,
+                    near_plane=self.config.near_plane,
+                    far_plane=self.config.far_plane,
+                    render_step_size=self.config.occ_step_size,
+                    alpha_thre=self.config.alpha_thre,
+                    cone_angle=self.config.cone_angle,
+                )
+                packed_info = nerfacc.pack_info(ray_indices, num_rays)
+                field_outputs = self.field(ray_samples)
 
-        packed_info = nerfacc.pack_info(ray_indices, num_rays)
+        else:
+            density_fns = self.density_fns
+            density_fns = [
+                functools.partial(f, conditioning_codes=conditioning_codes)
+                for f in density_fns
+            ]
+
+            ray_samples: RaySamples
+            ray_samples, weights_list, ray_samples_list = self.proposal_sampler(
+                ray_bundle, density_fns=density_fns
+            )
+
+            ray_samples.metadata["conditioning_codes"] = conditioning_codes
+            field_outputs = self.field(ray_samples)
+
+            ray_indices = torch.arange(num_rays, device=ray_bundle.origins.device)
+            ray_indices = torch.repeat_interleave(ray_indices, ray_samples.shape[1])
+            ray_samples.frustums.starts = ray_samples.frustums.starts.reshape(-1, 1)
+            ray_samples.frustums.ends = ray_samples.frustums.ends.reshape(-1, 1)
+            packed_info = nerfacc.pack_info(ray_indices, num_rays)
+
         weights = nerfacc.render_weight_from_density(
             t_starts=ray_samples.frustums.starts[..., 0],
             t_ends=ray_samples.frustums.ends[..., 0],
@@ -376,47 +465,48 @@ class KPlanesModel(Model):
             ray_indices=ray_indices,
             num_rays=num_rays,
         )
-        # import pdb; pdb.set_trace()
 
-        # weights = y_samples.get_weights(field_outputs[FieldHeadNames.DENSITY])
+        if not self.config.use_occupancy_grid:
+            weights_list.append(weights.reshape(num_rays, -1, 1))
+            ray_samples_list.append(ray_samples)
+            ray_samples.frustums.starts = ray_samples.frustums.starts.reshape(
+                num_rays, -1, 1
+            )
+            ray_samples.frustums.ends = ray_samples.frustums.ends.reshape(
+                num_rays, -1, 1
+            )
 
-        weights_list.append(weights.reshape(num_rays, -1, 1))
-        ray_samples_list.append(ray_samples)
-
-        ray_samples.frustums.starts = ray_samples.frustums.starts.reshape(
-            num_rays, -1, 1
-        )
-        ray_samples.frustums.ends = ray_samples.frustums.ends.reshape(num_rays, -1, 1)
-
-        ndf_features = self.renderer_features(
-            features=field_outputs["ndf_features"], 
-            weights=weights_list[-1],
-        )
-
-        steps = (ray_samples.frustums.starts + ray_samples.frustums.ends) / 2
+            # ndf_features = self.renderer_features(
+            #     features=field_outputs["ndf_features"],
+            #     weights=weights_list[-1],
+            # )
+            # steps = (ray_samples.frustums.starts + ray_samples.frustums.ends) / 2
         outputs = {
             "rgb": rgb,
             "depth": depth,
-            "weights": weights,
-            "steps": steps,
-            "ndf_features": ndf_features,
+            "weights": (weights,),
+            # "steps": (steps, )
+            # "ndf_features": (ndf_features, )
         }
 
         # These use a lot of GPU memory, so we avoid storing them for eval.
         if self.training:
-            outputs["weights_list"] = weights_list
-            outputs["ray_samples_list"] = ray_samples_list
+            if self.config.use_occupancy_grid:
+                weights_list.append(weights)
+                ray_samples_list.append(ray_samples)
+
+            outputs["weights_list"] = (weights_list,)
+            outputs["ray_samples_list"] = (ray_samples_list,)
 
         # for i in range(self.config.num_proposal_iterations):
         #     outputs[f"prop_depth_{i}"] = self.renderer_depth(
         #         weights=weights_list[i], ray_samples=ray_samples_list[i]
         #     )
 
-        prop_grids = [p.grids.plane_coefs for p in self.proposal_networks]
+        # prop_grids = [p.grids.plane_coefs for p in self.proposal_networks]
         field_grids = [g.plane_coefs for g in self.field.grids]
 
-        outputs["plane_tv"] = space_tv_loss(field_grids)
-        outputs["plane_tv_proposal_net"] = space_tv_loss(prop_grids)
+        outputs["plane_tv"] = (space_tv_loss(field_grids),)
 
         return outputs
 
@@ -425,27 +515,17 @@ class KPlanesModel(Model):
 
         metrics_dict = {"psnr": self.psnr(outputs["rgb"], image)}
         if self.training:
+            weights_list = outputs["weights_list"][0]
+            ray_sample_list = outputs["ray_samples_list"][0]
+
             metrics_dict["interlevel"] = interlevel_loss(
-                outputs["weights_list"], outputs["ray_samples_list"]
+                weights_list, ray_sample_list,
             )
             metrics_dict["distortion"] = distortion_loss(
-                outputs["weights_list"], outputs["ray_samples_list"]
+                weights_list, ray_sample_list,
             )
 
-            metrics_dict["plane_tv"] = outputs["plane_tv"]
-            metrics_dict["plane_tv_proposal_net"] = outputs["plane_tv_proposal_net"]
-
-            # prop_grids = [p.grids.plane_coefs for p in self.proposal_networks]
-            # field_grids = [g.plane_coefs for g in self.field.grids]
-
-            # metrics_dict["plane_tv"] = space_tv_loss(field_grids)
-            # metrics_dict["plane_tv_proposal_net"] = space_tv_loss(prop_grids)
-
-            # metrics_dict["l1_codes"] = torch.abs(1 - self.sample_embedding.weight).mean()
-
-            # first_difference = self.sample_embedding.weight[1:] - self.sample_embedding.weight[:-1] # h-1, w
-            # second_difference = first_difference[1:] - first_difference[:-1] # h-2, w
-            # metrics_dict["codes_smoothness"] = torch.square(second_difference).mean()
+            metrics_dict["plane_tv"] = outputs["plane_tv"][0]
 
         return metrics_dict
 

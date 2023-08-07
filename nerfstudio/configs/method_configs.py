@@ -567,7 +567,7 @@ method_configs['kplane-dynamic-big'] = TrainerConfig(
 method_configs['autodecode-kplane'] = TrainerConfig(
         method_name="autodecode-kplane",
         steps_per_eval_batch=1000,
-        steps_per_save=10000,
+        steps_per_save=1000,
         steps_per_eval_all_images=30000,
         max_num_iterations=3000001,
         mixed_precision=True,
@@ -577,11 +577,11 @@ method_configs['autodecode-kplane'] = TrainerConfig(
                 dataparser=DNeRFDataParserConfig(center_method="focus", scale_factor=1.0),
                 # train_num_images_to_sample_from=-1,
                 # eval_num_images_to_sample_from=-1,
-                train_num_images_to_sample_from=100,
-                eval_num_images_to_sample_from=100,
+                train_num_images_to_sample_from=50,
+                eval_num_images_to_sample_from=50,
                 train_num_times_to_repeat_images=1,
                 eval_num_times_to_repeat_images=1000,
-                train_num_rays_per_batch=2048,
+                train_num_rays_per_batch=1024,
                 eval_num_rays_per_batch=2048,
                 camera_optimizer=CameraOptimizerConfig(
                     mode="off",
@@ -591,10 +591,10 @@ method_configs['autodecode-kplane'] = TrainerConfig(
             model=DepthAutoDecodeKPlanesModelConfig(
                 eval_num_rays_per_chunk=1 << 15,
                 num_samples=64,
-                num_proposal_samples=(256, 256),
+                # num_proposal_samples=(256, 256),
 
                 grid_base_resolution=[128, 128, 128],  # time-resolution should be half the time-steps
-                grid_feature_dim=32,
+                grid_feature_dim=64,
 
                 multiscale_res=[1] + [2, 4],
                 proposal_net_args_list=[
@@ -655,7 +655,7 @@ method_configs["hypernerf-clean"] = TrainerConfig(
             train_num_times_to_repeat_images=1000,
             eval_num_times_to_repeat_images=1000,
             train_num_rays_per_batch=1024,
-            eval_num_rays_per_batch=2048,
+            eval_num_rays_per_batch=1024,
             camera_optimizer=CameraOptimizerConfig(
                 mode="SO3xR3", optimizer=AdamOptimizerConfig(lr=6e-4, eps=1e-8, weight_decay=1e-2)
             ),

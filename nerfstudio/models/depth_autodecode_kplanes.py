@@ -77,20 +77,23 @@ class DepthAutoDecodeKPlanesModel(KPlanesModel):
     def get_metrics_dict(self, outputs, batch):
         metrics_dict = super().get_metrics_dict(outputs, batch)
         if self.training:
+            weights_list = outputs["weights_list"][0]
+            ray_sample_list = outputs["ray_samples_list"][0]
+
             metrics_dict["depth_loss"] = 0.0
             sigma = self._get_sigma().to(self.device)
             termination_depth = batch["depth_image"].to(self.device)
-            for i in range(len(outputs["weights_list"])):
+            for i in range(len(weights_list)):
                 metrics_dict["depth_loss"] += depth_loss(
-                    weights=outputs["weights_list"][i],
-                    ray_samples=outputs["ray_samples_list"][i],
+                    weights=weights_list[i],
+                    ray_samples=ray_sample_list[i],
                     termination_depth=termination_depth,
                     predicted_depth=outputs["depth"],
                     sigma=sigma,
                     directions_norm=outputs["directions_norm"],
                     is_euclidean=self.config.is_euclidean_depth,
                     depth_loss_type=self.config.depth_loss_type,
-                ) / len(outputs["weights_list"])
+                ) / len(weights_list)
 
         return metrics_dict
 
