@@ -29,7 +29,7 @@ from nerfstudio.cameras.cameras import Cameras, CameraType
 from nerfstudio.configs import base_config as cfg
 from nerfstudio.data.datasets.base_dataset import InputDataset
 from nerfstudio.data.datasets.dnerf_dataset import DynamicDataset
-from nerfstudio.data.datasets.dnerf_dataset_fast import DynamicDatasetFast
+from nerfstudio.data.datasets.dnerf_dataset_fast import DynamicDatasetFast, norm_vals
 from nerfstudio.data.scene_box import SceneBox
 from nerfstudio.models.base_model import Model
 from nerfstudio.pipelines.base_pipeline import Pipeline
@@ -325,6 +325,16 @@ class ViewerState:
 
         n_samples = self.pipeline.model.n_samples
         sample_idx = int(self.control_panel.time * (n_samples - 1))
+        joint_pos_filename = self.pipeline.datamanager.train_dataset._dataparser_outputs.metadata["joint_pos_filenames"][sample_idx]
+        joint_pos = np.load(joint_pos_filename)["servo_data"]
+        joint_pos = torch.from_numpy(joint_pos)
+        # normalize
+        raw_min = torch.tensor([-384, -1792, -384, -1792])
+        raw_max = torch.tensor([1792, 384, 1792, 384])
+        new_min, new_max = -1.0, 1.0
+        joint_pos = norm_vals(
+            joint_pos, raw_min, raw_max, new_min=new_min, new_max=new_max
+        )
 
         camera = Cameras(
             fx=intrinsics_matrix[0, 0],
@@ -335,7 +345,7 @@ class ViewerState:
             camera_to_worlds=camera_to_world[None, ...],
             times=torch.tensor([self.control_panel.time], dtype=torch.float32),
             sample_inds=torch.tensor([sample_idx], dtype=torch.int32),
-            joint_pos=torch.zeros((4,), dtype=torch.float32),
+            joint_pos=joint_pos,
         )
         camera = camera.to(self.get_model().device)
         return camera
