@@ -94,6 +94,7 @@ class Cameras(TensorDataclass):
     camera_type: Int[Tensor, "*num_cameras 1"]
     times: Optional[TensorType["num_cameras", 1]]
     sample_inds: Optional[TensorType["num_cameras", 1]]
+    joint_pos: Optional[TensorType["num_cameras", "d"]]
     metadata: Optional[Dict]
 
     def __init__(
@@ -114,6 +115,7 @@ class Cameras(TensorDataclass):
         ] = CameraType.PERSPECTIVE,
         times: Optional[TensorType["num_cameras"]] = None,
         sample_inds: Optional[TensorType["num_cameras"]] = None,
+        joint_pos: Optional[TensorType["num_cameras", "d"]] = None,
         metadata: Optional[Dict] = None,
     ) -> None:
         """Initializes the Cameras object.
@@ -150,6 +152,7 @@ class Cameras(TensorDataclass):
         self.camera_type = self._init_get_camera_type(camera_type)
         self.times = self._init_get_times(times)
         self.sample_inds = self._init_get_sample_inds(sample_inds)
+        self.joint_pos = self._init_get_joint_pos(joint_pos)
 
         self.metadata = metadata
 
@@ -271,6 +274,17 @@ class Cameras(TensorDataclass):
             raise ValueError(f"sample inds must be None or a tensor, got {type(sample_inds)}")
 
         return sample_inds
+    
+    def _init_get_joint_pos(self, joint_pos: Union[None, torch.Tensor]) -> Union[None, torch.Tensor]:
+        if joint_pos is None:
+            joint_pos = None
+        elif isinstance(joint_pos, torch.Tensor):
+            if joint_pos.ndim == 0 or joint_pos.shape[-1] != 1:
+                joint_pos = joint_pos.to(self.device).expand(len(self.camera_to_worlds), -1)
+        else:
+            raise ValueError(f"joint_pos must be None or a tensor, got {type(joint_pos)}")
+
+        return joint_pos
 
     @property
     def device(self) -> TORCH_DEVICE:
@@ -336,6 +350,7 @@ class Cameras(TensorDataclass):
         aabb_box: Optional[SceneBox] = None,
         times: Optional[Union[Float[Tensor, "*num_rays 1"], float]] = None,
         sample_inds: Optional[Union[Int[Tensor, "*num_rays 1"], int]] = None,
+        joint_pos: Optional[Float[Tensor, "*num_rays d"]] = None,
     ) -> RayBundle:
         """Generates rays for the given camera indices.
 
@@ -416,6 +431,7 @@ class Cameras(TensorDataclass):
 
         if sample_inds is not None and isinstance(sample_inds, int):
             sample_inds = torch.tensor([sample_inds], device=cameras.device)
+
             
 
         assert camera_indices.shape[-1] == len(
@@ -473,6 +489,9 @@ class Cameras(TensorDataclass):
         
         if sample_inds is not None:
             sample_inds = sample_inds.broadcast_to(coords.shape[:-1] + (1,)).to(torch.long)
+        
+        if joint_pos is not None:
+            joint_pos = joint_pos.broadcast_to(coords.shape[:-1] + (joint_pos.shape[-1],)).to(torch.float32)
 
         # Checking our tensors have been standardized
         assert isinstance(coords, torch.Tensor) and isinstance(camera_indices, torch.Tensor)
@@ -485,7 +504,7 @@ class Cameras(TensorDataclass):
 
         raybundle = cameras._generate_rays_from_coords(
             camera_indices, coords, camera_opt_to_camera, distortion_params_delta, 
-            disable_distortion=disable_distortion, times=times, sample_inds=sample_inds
+            disable_distortion=disable_distortion, times=times, sample_inds=sample_inds, joint_pos=joint_pos
         )
 
         # If we have mandated that we don't keep the shape, then we flatten
@@ -527,6 +546,7 @@ class Cameras(TensorDataclass):
         disable_distortion: bool = False,
         times: Optional[Float[Tensor, "*num_rays 1"]] = None,
         sample_inds: Optional[Int[Tensor, "*num_rays 1"]] = None,
+        joint_pos: Optional[Float[Tensor, "*num_rays d"]] = None,
     ) -> RayBundle:
         """Generates rays for the given camera indices and coords where self isn't jagged
 
@@ -824,6 +844,8 @@ class Cameras(TensorDataclass):
             times = self.times[camera_indices, 0] if self.times is not None else None
         if sample_inds is None:
             sample_inds = self.sample_inds[camera_indices, 0] if self.sample_inds is not None else None
+        if joint_pos is None:
+            joint_pos = self.joint_pos[camera_indices[..., 0], :] if self.joint_pos is not None else None
 
         metadata = (
             self._apply_fn_to_dict(self.metadata, lambda x: x[true_indices]) if self.metadata is not None else None
@@ -845,6 +867,7 @@ class Cameras(TensorDataclass):
             camera_indices=camera_indices,
             times=times,
             sample_inds=sample_inds,
+            joint_pos=joint_pos,
             metadata=metadata,
         )
 

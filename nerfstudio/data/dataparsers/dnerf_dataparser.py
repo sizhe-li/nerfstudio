@@ -101,6 +101,8 @@ class DNeRF(DataParser):
         mask_filenames = []
         depth_filenames = []
         dense_features_filenames = []
+        joint_pos_filenames = []
+
         times = []
         sample_inds = []
         sample_to_camera_idx = []
@@ -159,6 +161,11 @@ class DNeRF(DataParser):
             dense_features_filepath = data_dir / Path(str(filepath).replace("images", "dense_features").replace(".png", ".npz"))
             if dense_features_filepath.exists():
                 dense_features_filenames.append(str(dense_features_filepath))
+
+            joint_path_head = str(fname.parent.parent.parent).replace("nerfstudio_ready", "raw_captures")
+            joint_path_base = str(fname.name)[:-4] + ".npz"
+            joint_filename = Path(joint_path_head) / Path(joint_path_base)
+            joint_pos_filenames.append(str(joint_filename))
 
         # camera dependent
         for cam_cfg in meta["cameras"]:
@@ -363,6 +370,7 @@ class DNeRF(DataParser):
                 "depth_unit_scale_factor": self.config.depth_unit_scale_factor,
                 "times": times,
                 "sample_inds": sample_inds if self.sample_idx_enabled else None,
+                "joint_pos_filenames": joint_pos_filenames,
             },
             sample_to_camera_idx=sample_to_camera_idx
         )

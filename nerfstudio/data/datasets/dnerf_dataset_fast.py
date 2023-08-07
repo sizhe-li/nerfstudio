@@ -26,6 +26,12 @@ from nerfstudio.data.utils.data_utils import get_depth_image_from_path
 from nerfstudio.data.pixel_samplers import PixelSampler
 
 
+def norm_vals(curr_vals, old_min, old_max, new_min=0.0, new_max=1.0):
+    values = (curr_vals - old_min) / (old_max - old_min)
+    values = (new_max - new_min) * values + new_min
+    return values
+
+
 class DynamicDatasetFast(InputDataset):
     def __init__(
         self, dataparser_outputs: DNeRFDataParserOutputs, scale_factor: float = 1.0
@@ -37,19 +43,42 @@ class DynamicDatasetFast(InputDataset):
         self.num_rays = 128
         # self.pixel_sampler = PixelSampler(num_rays_per_batch=1024)
         self.image_coords = self.cameras.get_image_coords()
+        self.joint_pos_filenames = dataparser_outputs.metadata["joint_pos_filenames"]
 
     def get_metadata(self, data: Dict) -> Dict:
         ret_dict = dict()
 
         image_idx = data["image_idx"]
-        broad_cast_shape = data["image"].shape[:-1] + (1,)  # "* H W 1"
+        broad_cast_shape_single_dim = data["image"].shape[:-1] + (1,)  # "* H W 1"
+
+        # TODO: get rid of hard-coding
+        broad_cast_shape_robot_dim = data["image"].shape[:-1] + (4,)  # "* H W 4"
 
         if self.times is not None:
-            times = self.times[image_idx].broadcast_to(broad_cast_shape)
+            times = self.times[image_idx].broadcast_to(broad_cast_shape_single_dim)
             ret_dict["times"] = times
         if self.sample_inds is not None:
-            sample_inds = self.sample_inds[image_idx].broadcast_to(broad_cast_shape)
+            sample_inds = self.sample_inds[image_idx].broadcast_to(
+                broad_cast_shape_single_dim
+            )
             ret_dict["sample_inds"] = sample_inds
+
+        if self.joint_pos_filenames is not None:
+            joint_pos = np.load(self.joint_pos_filenames[image_idx])["servo_data"]
+            joint_pos = torch.from_numpy(joint_pos).broadcast_to(
+                broad_cast_shape_robot_dim
+            )
+
+            # normalize
+            raw_min = torch.tensor([-384, -1792, -384, -1792])
+            raw_max = torch.tensor([1792, 384, 1792, 384])
+
+            new_min, new_max = -1.0, 1.0
+
+            joint_pos = norm_vals(
+                joint_pos, raw_min, raw_max, new_min=new_min, new_max=new_max
+            )
+            ret_dict["joint_pos"] = joint_pos
 
         return ret_dict
 
@@ -66,24 +95,13 @@ class DynamicDatasetFast(InputDataset):
         _, y, x = (i.flatten() for i in torch.split(indices, 1, dim=-1))
 
         for k, v in batch.items():
-            if k != "image_idx" and v is not None:
+            if k not in ["image_idx"] and v is not None:
                 batch[k] = v[y, x]
 
         batch.pop("image_idx")
 
         indices[:, 0] = self._dataparser_outputs.sample_to_camera_idx[image_idx].item()
         batch["indices"] = indices
-
-        # camera_idx = self._dataparser_outputs.sample_to_camera_idx[image_idx].item()
-
-        # sample_inds = batch["sample_inds"]
-        # coords = self.image_coords[y, x]
-
-        # ray_bundle = self.cameras.generate_rays(
-        #     camera_indices=camera_idx,
-        #     coords=coords,
-        #     sample_inds=sample_inds,
-        # )
 
         return batch
 

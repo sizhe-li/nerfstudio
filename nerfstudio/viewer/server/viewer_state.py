@@ -324,6 +324,7 @@ class ViewerState:
             camera_type = CameraType.PERSPECTIVE
 
         n_samples = self.pipeline.model.n_samples
+        sample_idx = int(self.control_panel.time * (n_samples - 1))
 
         camera = Cameras(
             fx=intrinsics_matrix[0, 0],
@@ -333,7 +334,8 @@ class ViewerState:
             camera_type=camera_type,
             camera_to_worlds=camera_to_world[None, ...],
             times=torch.tensor([self.control_panel.time], dtype=torch.float32),
-            sample_inds=torch.tensor([int(self.control_panel.time * (n_samples - 1))], dtype=torch.int32),
+            sample_inds=torch.tensor([sample_idx], dtype=torch.int32),
+            joint_pos=torch.zeros((4,), dtype=torch.float32),
         )
         camera = camera.to(self.get_model().device)
         return camera

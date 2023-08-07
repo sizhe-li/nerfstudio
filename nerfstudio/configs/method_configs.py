@@ -610,15 +610,15 @@ method_configs['autodecode-kplane'] = TrainerConfig(
         ),
         optimizers={
             "proposal_networks": {
-                "optimizer": AdamOptimizerConfig(lr=1e-2, eps=1e-12),
+                "optimizer": AdamOptimizerConfig(lr=1e-3, eps=1e-12),
                 "scheduler": CosineDecaySchedulerConfig(warm_up_end=512, max_steps=300000),
             },
             "fields": {
-                "optimizer": AdamOptimizerConfig(lr=1e-2, eps=1e-12),
+                "optimizer": AdamOptimizerConfig(lr=1e-3, eps=1e-12),
                 "scheduler": CosineDecaySchedulerConfig(warm_up_end=512, max_steps=300000),
             },
             "embeddings": {
-                "optimizer": AdamOptimizerConfig(lr=5e-3, eps=1e-15, weight_decay=1e-4),
+                "optimizer": AdamOptimizerConfig(lr=5e-4, eps=1e-15, weight_decay=1e-4),
                 "scheduler": CosineDecaySchedulerConfig(warm_up_end=512, max_steps=300000),
             },
         },

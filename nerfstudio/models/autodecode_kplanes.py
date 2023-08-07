@@ -64,6 +64,9 @@ from nerfstudio.utils import colormaps, misc
 
 from nerfstudio.fields.autodecode_kplanes_field import KPlanesDensityField, KPlanesField
 
+from kinematics.model.components.pos_encoding import PosFreqEncoding
+from einops.layers.torch import Rearrange
+
 
 @dataclass
 class KPlanesModelConfig(ModelConfig):
@@ -193,14 +196,32 @@ class KPlanesModel(Model):
 
         self.n_samples = self.kwargs["metadata"]["sample_inds"].max() + 1
 
-        self.sample_embedding = nn.Embedding(
-            self.n_samples, self.config.grid_feature_dim
+        # TODO: remove hard-coding
+        self.n_joints = 4
+
+        pos_freq_emb = PosFreqEncoding(num_freqs=4, d_in=1)
+        preprocess_ops = [
+            Rearrange(
+                "batch (n d) -> batch n d",
+                n=self.n_joints,
+            ),
+            pos_freq_emb,
+            nn.Linear(pos_freq_emb.d_out, self.config.grid_feature_dim),
+        ]
+
+        self.joint_preprocess = nn.Sequential(*preprocess_ops)
+        self.joint_idx_emb = nn.Parameter(
+            torch.randn((1, self.n_joints, self.config.grid_feature_dim))
         )
-        torch.nn.init.normal_(
-            self.sample_embedding.weight,
-            mean=0.0,
-            std=0.01 / math.sqrt(self.config.grid_feature_dim),
-        )
+
+        # self.sample_embedding = nn.Embedding(
+        #     self.n_samples, self.config.grid_feature_dim
+        # )
+        # torch.nn.init.normal_(
+        #     self.sample_embedding.weight,
+        #     mean=0.0,
+        #     std=0.01 / math.sqrt(self.config.grid_feature_dim),
+        # )
 
         # Fields
         self.field = KPlanesField(
@@ -331,8 +352,9 @@ class KPlanesModel(Model):
 
     def get_param_groups(self) -> Dict[str, List[Parameter]]:
         param_groups = {
-            "fields": list(self.field.parameters()),
-            "embeddings": list(self.sample_embedding.parameters()),
+            "fields": list(self.field.parameters()) 
+            + list(self.joint_preprocess.parameters()) + [self.joint_idx_emb],
+            # "embeddings": list(self.sample_embedding.parameters()),
         }
         if not self.config.use_occupancy_grid:
             param_groups["proposal_networks"] = list(
@@ -401,7 +423,11 @@ class KPlanesModel(Model):
         return callbacks
 
     def get_outputs(self, ray_bundle: RayBundle):
-        conditioning_codes = self.sample_embedding(ray_bundle.sample_inds)
+        # conditioning_codes = self.sample_embedding(ray_bundle.sample_inds)
+        joint_pos = ray_bundle.joint_pos
+        conditioning_codes = self.joint_preprocess(joint_pos)
+        conditioning_codes = conditioning_codes + self.joint_idx_emb[:]
+
         if not self.training:
             if "conditioning_codes" in ray_bundle.metadata:
                 conditioning_codes = ray_bundle.metadata["conditioning_codes"]
@@ -437,8 +463,8 @@ class KPlanesModel(Model):
                 ray_bundle, density_fns=density_fns
             )
 
-            ray_samples.metadata["conditioning_codes"] = conditioning_codes
-            field_outputs = self.field(ray_samples)
+            # ray_samples.metadata["conditioning_codes"] = conditioning_codes
+            field_outputs = self.field(ray_samples, conditioning_codes=conditioning_codes)
 
             ray_indices = torch.arange(num_rays, device=ray_bundle.origins.device)
             ray_indices = torch.repeat_interleave(ray_indices, ray_samples.shape[1])
@@ -517,14 +543,18 @@ class KPlanesModel(Model):
                 ray_sample_list = outputs["ray_samples_list"][0]
 
                 metrics_dict["interlevel"] = interlevel_loss(
-                    weights_list, ray_sample_list,
+                    weights_list,
+                    ray_sample_list,
                 )
                 metrics_dict["distortion"] = distortion_loss(
-                    weights_list, ray_sample_list,
+                    weights_list,
+                    ray_sample_list,
                 )
 
                 metrics_dict["plane_tv"] = outputs["plane_tv"][0]
-                metrics_dict["plane_tv_proposal_net"] = outputs["plane_tv_proposal_net"][0]
+                metrics_dict["plane_tv_proposal_net"] = outputs[
+                    "plane_tv_proposal_net"
+                ][0]
 
         return metrics_dict
 

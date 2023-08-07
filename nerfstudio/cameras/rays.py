@@ -212,6 +212,8 @@ class RayBundle(TensorDataclass):
     """Times at which rays are sampled"""
     sample_inds: Optional[Int[Tensor, "*batch 1"]] = None
     "Long tensor of sample_inds for each ray."
+    joint_pos: Optional[Float[Tensor, "*batch d"]] = None
+    "Long tensor of sample_inds for each ray."
 
     def set_camera_indices(self, camera_index: int) -> None:
         """Sets all the camera indices to a specific camera index.

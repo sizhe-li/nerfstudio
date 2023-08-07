@@ -39,23 +39,35 @@ from typing import Tuple
 
 import torch
 
+
 def chunked(max_chunk_size: int, *lists) -> Tuple:
     for value_list in lists:
         # All lists should have same length
         # There is the edge case where an empty tensor or None is passed. These are fine as well
-        assert isinstance(value_list, torch.Tensor) and len(value_list.shape) == 0 \
-               or value_list is None \
-               or len(value_list) == len(lists[0])
+        assert (
+            isinstance(value_list, torch.Tensor)
+            and len(value_list.shape) == 0
+            or value_list is None
+            or len(value_list) == len(lists[0])
+        )
 
     size = len(lists[0])
     for i_chunk in range(ceil(size / max_chunk_size)):
         sliced_lists = []
         for value_list in lists:
-            if isinstance(value_list, torch.Tensor) and len(value_list.shape) == 0 or value_list is None:
+            if (
+                isinstance(value_list, torch.Tensor)
+                and len(value_list.shape) == 0
+                or value_list is None
+            ):
                 # Empty tensor or None
                 sliced_lists.append(value_list)
             else:
-                sliced_lists.append(value_list[i_chunk * max_chunk_size: (i_chunk + 1) * max_chunk_size])
+                sliced_lists.append(
+                    value_list[
+                        i_chunk * max_chunk_size : (i_chunk + 1) * max_chunk_size
+                    ]
+                )
 
         if len(sliced_lists) == 1:
             yield sliced_lists[0]
@@ -184,7 +196,7 @@ class KPlanesField(Field):
             dim_head=16,
             mlp_dim=32,
             selfatt=False,
-            kv_dim=self.sample_code_dim // 4,
+            kv_dim=self.sample_code_dim,
         )
 
         # Init decoder network
@@ -288,15 +300,12 @@ class KPlanesField(Field):
                 pixel_area=torch.ones_like(positions[..., :1]),
             ),
         )
-        if not isinstance(ray_samples.metadata, dict):
-            ray_samples.metadata = {"conditioning_codes": conditioning_codes}
-        else:
-            ray_samples.metadata["conditioning_codes"] = conditioning_codes
-
-        density, _ = self.get_density(ray_samples)
+        density, _ = self.get_density(ray_samples, conditioning_codes)
         return density
 
-    def get_density(self, ray_samples: RaySamples) -> Tuple[TensorType, TensorType]:
+    def get_density(
+        self, ray_samples: RaySamples, conditioning_codes
+    ) -> Tuple[TensorType, TensorType]:
         """Computes and returns the densities."""
         positions = ray_samples.frustums.get_positions()
         if self.spatial_distortion is not None:
@@ -330,10 +339,10 @@ class KPlanesField(Field):
                 (0, 1), device=grid_features.device, requires_grad=True
             )
 
-        conditioning_codes = ray_samples.metadata["conditioning_codes"]
-        conditioning_codes = conditioning_codes.reshape(
-            -1, 4, conditioning_codes.shape[-1] // 4
-        )
+        # conditioning_codes = ray_samples.metadata["conditioning_codes"]
+        # conditioning_codes = conditioning_codes.reshape(
+        #     -1, 4, conditioning_codes.shape[-1] // 4
+        # )
 
         if len(grid_features.shape) == 2:
             grid_features = grid_features.unsqueeze(1)
@@ -343,9 +352,13 @@ class KPlanesField(Field):
                 max_chunk_size = 5000
 
                 list_grid_features = []
-                for grid_features_chunked, conditioning_codes_chunked in chunked(max_chunk_size, grid_features, conditioning_codes):
+                for grid_features_chunked, conditioning_codes_chunked in chunked(
+                    max_chunk_size, grid_features, conditioning_codes
+                ):
                     grid_features_chunked, _ = self.decoder(
-                        grid_features_chunked, z=conditioning_codes_chunked, get_layer_act=False
+                        grid_features_chunked,
+                        z=conditioning_codes_chunked,
+                        get_layer_act=False,
                     )
                     list_grid_features.append(grid_features_chunked)
                 grid_features = torch.cat(list_grid_features, dim=0)
@@ -450,6 +463,34 @@ class KPlanesField(Field):
             "dense_features": dense_features,
         }
 
+    def forward(
+        self,
+        ray_samples: RaySamples,
+        compute_normals: bool = False,
+        conditioning_codes=None,
+    ) -> Dict[FieldHeadNames, Tensor]:
+        """Evaluates the field at points along the ray.
+
+        Args:
+            ray_samples: Samples to evaluate field on.
+        """
+        if compute_normals:
+            with torch.enable_grad():
+                density, density_embedding = self.get_density(ray_samples, conditioning_codes=conditioning_codes)
+        else:
+            density, density_embedding = self.get_density(ray_samples, conditioning_codes=conditioning_codes)
+
+        field_outputs = self.get_outputs(
+            ray_samples, density_embedding=density_embedding
+        )
+        field_outputs[FieldHeadNames.DENSITY] = density  # type: ignore
+
+        if compute_normals:
+            with torch.enable_grad():
+                normals = self.get_normals()
+            field_outputs[FieldHeadNames.NORMALS] = normals  # type: ignore
+        return field_outputs
+
 
 class KPlanesDensityField(Field):
     """A lightweight density field module.
@@ -491,7 +532,7 @@ class KPlanesDensityField(Field):
             dim_head=16,
             mlp_dim=32,
             selfatt=False,
-            kv_dim=self.sample_code_dim // 4,
+            kv_dim=self.sample_code_dim,
         )
 
         self.sigma_net = tcnn.Network(
@@ -530,14 +571,12 @@ class KPlanesDensityField(Field):
                 pixel_area=torch.ones_like(positions[..., :1]),
             ),
         )
-        if not isinstance(ray_samples.metadata, dict):
-            ray_samples.metadata = {"conditioning_codes": conditioning_codes}
-        else:
-            ray_samples.metadata["conditioning_codes"] = conditioning_codes
-        density, _ = self.get_density(ray_samples)
+        density, _ = self.get_density(ray_samples, conditioning_codes)
         return density
 
-    def get_density(self, ray_samples: RaySamples) -> Tuple[TensorType, None]:
+    def get_density(
+        self, ray_samples: RaySamples, conditioning_codes
+    ) -> Tuple[TensorType, None]:
         """Computes and returns the densities."""
         positions = ray_samples.frustums.get_positions()
         if self.spatial_distortion is not None:
@@ -563,10 +602,9 @@ class KPlanesDensityField(Field):
             positions, grid_encodings=[self.grids], concat_features=False
         )
 
-        conditioning_codes = ray_samples.metadata["conditioning_codes"]
-        conditioning_codes = conditioning_codes.view(
-            -1, 4, conditioning_codes.shape[-1] // 4
-        )
+        # conditioning_codes = conditioning_codes.view(
+        #     -1, 4, conditioning_codes.shape[-1] // 4
+        # )
         grid_features, _ = self.decoder(grid_features, z=conditioning_codes)
         grid_features = grid_features.view(-1, self.feature_dim)
 

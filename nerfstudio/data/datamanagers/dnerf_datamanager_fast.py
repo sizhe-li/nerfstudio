@@ -496,7 +496,7 @@ class DNeRFDataManagerFast(DataManager, Generic[TDataset]):
             batch_size=self.config.train_num_images_to_sample_from,
             shuffle=True,
             pin_memory=True,
-            num_workers=16,    
+            num_workers=self.world_size * 16,
         )
         self.iter_train_image_dataloader = iter(self.train_image_dataloader)
         # self.train_pixel_sampler = self._get_pixel_sampler(
@@ -519,7 +519,7 @@ class DNeRFDataManagerFast(DataManager, Generic[TDataset]):
             batch_size=self.config.eval_num_images_to_sample_from,
             shuffle=True,
             pin_memory=True,
-            num_workers=16,    
+            num_workers=self.world_size * 16,
         )
         self.iter_eval_image_dataloader = iter(self.eval_image_dataloader)
         self.eval_camera_optimizer = self.config.camera_optimizer.setup(
@@ -546,6 +546,7 @@ class DNeRFDataManagerFast(DataManager, Generic[TDataset]):
 
         ray_indices = batch["indices"].to(self.device)
         sample_indices = batch["sample_inds"].to(self.device)
+        joint_pos = batch["joint_pos"].to(self.device)
 
         camera_indices = ray_indices[..., 0:1]
         y = ray_indices[..., 1]
@@ -554,7 +555,10 @@ class DNeRFDataManagerFast(DataManager, Generic[TDataset]):
         coords = self.train_ray_generator.image_coords[y, x]
 
         ray_bundle = self.train_ray_generator.cameras.generate_rays(
-            camera_indices=camera_indices, coords=coords, sample_inds=sample_indices
+            camera_indices=camera_indices,
+            coords=coords,
+            sample_inds=sample_indices,
+            joint_pos=joint_pos
         ).reshape(-1)
 
         for k, v in batch.items():

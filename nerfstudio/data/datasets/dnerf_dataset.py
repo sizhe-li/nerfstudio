@@ -26,6 +26,12 @@ from nerfstudio.data.datasets.base_dataset import InputDataset
 from nerfstudio.data.utils.data_utils import get_depth_image_from_path
 
 
+def norm_vals(curr_vals, old_min, old_max, new_min=0.0, new_max=1.0):
+    values = (curr_vals - old_min) / (old_max - old_min)
+    values = (new_max - new_min) * values + new_min
+    return values
+
+
 class DynamicDataset(InputDataset):
     def __init__(
         self, dataparser_outputs: DNeRFDataParserOutputs, scale_factor: float = 1.0
@@ -34,22 +40,44 @@ class DynamicDataset(InputDataset):
 
         self.times = dataparser_outputs.metadata["times"]
         self.sample_inds = dataparser_outputs.metadata["sample_inds"]
+        self.joint_pos_filenames = dataparser_outputs.metadata["joint_pos_filenames"]
 
     def get_metadata(self, data: Dict) -> Dict:
         ret_dict = dict()
 
         image_idx = data["image_idx"]
-        broad_cast_shape = data["image"].shape[:-1] + (1,)  # "* H W 1"
+        broad_cast_shape_single_dim = data["image"].shape[:-1] + (1,)  # "* H W 1"
+
+        # TODO: get rid of hard-coding
+        broad_cast_shape_robot_dim = data["image"].shape[:-1] + (4,)  # "* H W 4"
 
         if self.times is not None:
-            times = self.times[image_idx].broadcast_to(broad_cast_shape)
+            times = self.times[image_idx].broadcast_to(broad_cast_shape_single_dim)
             ret_dict["times"] = times
         if self.sample_inds is not None:
-            sample_inds = self.sample_inds[image_idx].broadcast_to(broad_cast_shape)
+            sample_inds = self.sample_inds[image_idx].broadcast_to(
+                broad_cast_shape_single_dim
+            )
             ret_dict["sample_inds"] = sample_inds
 
-        return ret_dict
+        if self.joint_pos_filenames is not None:
+            joint_pos = np.load(self.joint_pos_filenames[image_idx])["servo_data"]
+            joint_pos = torch.from_numpy(joint_pos).broadcast_to(
+                broad_cast_shape_robot_dim
+            )
 
+            # normalize
+            raw_min = torch.tensor([-384, -1792, -384, -1792])
+            raw_max = torch.tensor([1792, 384, 1792, 384])
+
+            new_min, new_max = -1.0, 1.0
+
+            joint_pos = norm_vals(
+                joint_pos, raw_min, raw_max, new_min=new_min, new_max=new_max
+            )
+            ret_dict["joint_pos"] = joint_pos
+
+        return ret_dict
 
 
 class DynamicDepthDataset(DynamicDataset):
@@ -123,7 +151,9 @@ class DynamicDepthFeatureDataset(DynamicDepthDataset):
         ret_dict = super().get_metadata(data)
 
         filepath = self.dense_features_filenames[data["image_idx"]]
-        ret_dict["dense_features_gt"] = torch.from_numpy(np.load(filepath)["dense_features_gt"])
+        ret_dict["dense_features_gt"] = torch.from_numpy(
+            np.load(filepath)["dense_features_gt"]
+        )
 
         # self._dataparser_outputs: DNeRFDataParserOutputs
         # cam_idx = self._dataparser_outputs.sample_to_camera_idx[data["image_idx"]]
@@ -140,4 +170,3 @@ class DynamicDepthFeatureDataset(DynamicDepthDataset):
 
         # ret_dict["depth_image"] = depth_image
         return ret_dict
-
