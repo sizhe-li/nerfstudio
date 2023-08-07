@@ -579,8 +579,6 @@ method_configs['autodecode-kplane'] = TrainerConfig(
                 # eval_num_images_to_sample_from=-1,
                 train_num_images_to_sample_from=50,
                 eval_num_images_to_sample_from=50,
-                train_num_times_to_repeat_images=1,
-                eval_num_times_to_repeat_images=1000,
                 train_num_rays_per_batch=1024,
                 eval_num_rays_per_batch=2048,
                 camera_optimizer=CameraOptimizerConfig(
@@ -591,10 +589,10 @@ method_configs['autodecode-kplane'] = TrainerConfig(
             model=DepthAutoDecodeKPlanesModelConfig(
                 eval_num_rays_per_chunk=1 << 15,
                 num_samples=64,
-                # num_proposal_samples=(256, 256),
+                num_proposal_samples=(256, 256),
 
                 grid_base_resolution=[128, 128, 128],  # time-resolution should be half the time-steps
-                grid_feature_dim=64,
+                grid_feature_dim=32,
 
                 multiscale_res=[1] + [2, 4],
                 proposal_net_args_list=[
@@ -607,22 +605,20 @@ method_configs['autodecode-kplane'] = TrainerConfig(
                     "distortion": 0.01,
                     "plane_tv": 0.1,
                     "plane_tv_proposal_net": 0.0001,
-                    # "l1_codes": 0.0001,
-                    # "codes_smoothness": 0.0001,
                 },
             ),
         ),
         optimizers={
             "proposal_networks": {
-                "optimizer": AdamOptimizerConfig(lr=1e-3, eps=1e-12),
+                "optimizer": AdamOptimizerConfig(lr=1e-2, eps=1e-12),
                 "scheduler": CosineDecaySchedulerConfig(warm_up_end=512, max_steps=300000),
             },
             "fields": {
-                "optimizer": AdamOptimizerConfig(lr=1e-3, eps=1e-12),
+                "optimizer": AdamOptimizerConfig(lr=1e-2, eps=1e-12),
                 "scheduler": CosineDecaySchedulerConfig(warm_up_end=512, max_steps=300000),
             },
             "embeddings": {
-                "optimizer": AdamOptimizerConfig(lr=5e-4, eps=1e-15, weight_decay=1e-4),
+                "optimizer": AdamOptimizerConfig(lr=5e-3, eps=1e-15, weight_decay=1e-4),
                 "scheduler": CosineDecaySchedulerConfig(warm_up_end=512, max_steps=300000),
             },
         },

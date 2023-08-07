@@ -143,7 +143,7 @@ class KPlanesModelConfig(ModelConfig):
     use_average_appearance_embedding: bool = True
     """Whether to use average appearance embedding or zeros for inference."""
 
-    background_color: Literal["random", "last_sample", "black", "white"] = "white"
+    background_color: Literal["random", "last_sample", "black", "white"] = "random"
     """The background color as RGB."""
 
     loss_coefficients: Dict[str, float] = to_immutable_dict(
@@ -168,9 +168,9 @@ class KPlanesModelConfig(ModelConfig):
     """Levels of the grid used for the field."""
     occ_step_size: Optional[float] = None
     """Minimum step size for rendering."""
-    alpha_thre: float = 0.01
+    alpha_thre: float = 0.00
     """Threshold for opacity skipping."""
-    cone_angle: float = 0.004
+    cone_angle: float = 0.000
     """Should be set to 0.0 for blender scenes but 1./256 for real scenes."""
 
 
@@ -421,8 +421,9 @@ class KPlanesModel(Model):
                     alpha_thre=self.config.alpha_thre,
                     cone_angle=self.config.cone_angle,
                 )
-                packed_info = nerfacc.pack_info(ray_indices, num_rays)
-                field_outputs = self.field(ray_samples)
+
+            packed_info = nerfacc.pack_info(ray_indices, num_rays)
+            field_outputs = self.field(ray_samples)
 
         else:
             density_fns = self.density_fns
@@ -498,15 +499,11 @@ class KPlanesModel(Model):
             outputs["weights_list"] = (weights_list,)
             outputs["ray_samples_list"] = (ray_samples_list,)
 
-        # for i in range(self.config.num_proposal_iterations):
-        #     outputs[f"prop_depth_{i}"] = self.renderer_depth(
-        #         weights=weights_list[i], ray_samples=ray_samples_list[i]
-        #     )
-
-        # prop_grids = [p.grids.plane_coefs for p in self.proposal_networks]
-        field_grids = [g.plane_coefs for g in self.field.grids]
-
-        outputs["plane_tv"] = (space_tv_loss(field_grids),)
+        if not self.config.use_occupancy_grid:
+            prop_grids = [p.grids.plane_coefs for p in self.proposal_networks]
+            field_grids = [g.plane_coefs for g in self.field.grids]
+            outputs["plane_tv"] = (space_tv_loss(field_grids),)
+            outputs["plane_tv_proposal_net"] = (space_tv_loss(prop_grids),)
 
         return outputs
 
@@ -515,17 +512,19 @@ class KPlanesModel(Model):
 
         metrics_dict = {"psnr": self.psnr(outputs["rgb"], image)}
         if self.training:
-            weights_list = outputs["weights_list"][0]
-            ray_sample_list = outputs["ray_samples_list"][0]
+            if not self.config.use_occupancy_grid:
+                weights_list = outputs["weights_list"][0]
+                ray_sample_list = outputs["ray_samples_list"][0]
 
-            metrics_dict["interlevel"] = interlevel_loss(
-                weights_list, ray_sample_list,
-            )
-            metrics_dict["distortion"] = distortion_loss(
-                weights_list, ray_sample_list,
-            )
+                metrics_dict["interlevel"] = interlevel_loss(
+                    weights_list, ray_sample_list,
+                )
+                metrics_dict["distortion"] = distortion_loss(
+                    weights_list, ray_sample_list,
+                )
 
-            metrics_dict["plane_tv"] = outputs["plane_tv"][0]
+                metrics_dict["plane_tv"] = outputs["plane_tv"][0]
+                metrics_dict["plane_tv_proposal_net"] = outputs["plane_tv_proposal_net"][0]
 
         return metrics_dict
 

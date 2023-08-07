@@ -83,13 +83,13 @@ class AutoDecodeVolumetricSampler(VolumetricSampler):
             starts = torch.ones((1,), dtype=starts.dtype, device=rays_o.device)
             ends = torch.ones((1,), dtype=ends.dtype, device=rays_o.device)
 
-        if self.training:
-            max_num_samples = 3024
-            if len(ray_indices) > max_num_samples:
-                reduce_inds = torch.randperm(len(ray_indices))[:max_num_samples]
-                ray_indices = ray_indices[reduce_inds]
-                starts = starts[reduce_inds]
-                ends = ends[reduce_inds]
+        # if self.training:
+        #     max_num_samples = 3024
+        #     if len(ray_indices) > max_num_samples:
+        #         reduce_inds = torch.randperm(len(ray_indices))[:max_num_samples]
+        #         ray_indices = ray_indices[reduce_inds]
+        #         starts = starts[reduce_inds]
+        #         ends = ends[reduce_inds]
 
         origins = rays_o[ray_indices]
         dirs = rays_d[ray_indices]

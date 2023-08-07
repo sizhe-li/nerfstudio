@@ -318,10 +318,9 @@ class KPlanesField(Field):
                 (positions, timestamps), dim=-1
             )  # [n_rays, n_samples, 4]
 
-        positions_flat = positions
         # positions_flat = positions.view(-1, positions.shape[-1])
         grid_features = interpolate_ms_features(
-            positions_flat,
+            positions,
             grid_encodings=self.grids,
             concat_features=self.concat_across_scales,
         )
@@ -336,23 +335,28 @@ class KPlanesField(Field):
             -1, 4, conditioning_codes.shape[-1] // 4
         )
 
-        # grid_features = grid_features.unsqueeze(1)
+        if len(grid_features.shape) == 2:
+            grid_features = grid_features.unsqueeze(1)
 
-        # if not self.training:
-        #     # chunk
-        #     max_chunk_size = 10000
+            if not self.training:
+                # chunk
+                max_chunk_size = 5000
 
-        #     list_grid_features = []
-        #     for grid_features_chunked, conditioning_codes_chunked in chunked(max_chunk_size, grid_features, conditioning_codes):
-        #         grid_features_chunked, _ = self.decoder(
-        #             grid_features_chunked, z=conditioning_codes_chunked, get_layer_act=False
-        #         )
-        #         list_grid_features.append(grid_features_chunked)
-        #     grid_features = torch.cat(list_grid_features, dim=0)
-        # else:
-        grid_features, _ = self.decoder(
-            grid_features, z=conditioning_codes, get_layer_act=False
-        )
+                list_grid_features = []
+                for grid_features_chunked, conditioning_codes_chunked in chunked(max_chunk_size, grid_features, conditioning_codes):
+                    grid_features_chunked, _ = self.decoder(
+                        grid_features_chunked, z=conditioning_codes_chunked, get_layer_act=False
+                    )
+                    list_grid_features.append(grid_features_chunked)
+                grid_features = torch.cat(list_grid_features, dim=0)
+            else:
+                grid_features, _ = self.decoder(
+                    grid_features, z=conditioning_codes, get_layer_act=False
+                )
+        else:
+            grid_features, _ = self.decoder(
+                grid_features, z=conditioning_codes, get_layer_act=False
+            )
 
         grid_features = grid_features.view(-1, self.feature_dim)
 
@@ -555,11 +559,8 @@ class KPlanesDensityField(Field):
                 (positions, timestamps), dim=-1
             )  # [n_rays, n_samples, 4]
 
-        n_rays, n_samples = positions.shape[:2]
-
-        positions_flat = positions
         grid_features = interpolate_ms_features(
-            positions_flat, grid_encodings=[self.grids], concat_features=False
+            positions, grid_encodings=[self.grids], concat_features=False
         )
 
         conditioning_codes = ray_samples.metadata["conditioning_codes"]
