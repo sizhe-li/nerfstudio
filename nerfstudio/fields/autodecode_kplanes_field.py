@@ -192,7 +192,7 @@ class KPlanesField(Field):
         self.decoder = Transformer(
             dim=self.feature_dim,
             depth=2,
-            heads=8,
+            heads=4,
             dim_head=16,
             mlp_dim=32,
             selfatt=False,

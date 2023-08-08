@@ -162,7 +162,7 @@ class DNeRF(DataParser):
             if dense_features_filepath.exists():
                 dense_features_filenames.append(str(dense_features_filepath))
 
-            joint_path_head = str(fname.parent.parent.parent).replace("nerfstudio_ready", "raw_captures")
+            joint_path_head = str(fname.parent.parent.parent).replace("nerfstudio_ready", "raw_captures").replace("small_grid", "08-04-grid")
             joint_path_base = str(fname.name)[:-4] + ".npz"
             joint_filename = Path(joint_path_head) / Path(joint_path_base)
             joint_pos_filenames.append(str(joint_filename))

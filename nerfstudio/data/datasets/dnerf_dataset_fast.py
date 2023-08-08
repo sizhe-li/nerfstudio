@@ -40,7 +40,7 @@ class DynamicDatasetFast(InputDataset):
 
         self.times = dataparser_outputs.metadata["times"]
         self.sample_inds = dataparser_outputs.metadata["sample_inds"]
-        self.num_rays = 128
+        self.num_rays = 256
         # self.pixel_sampler = PixelSampler(num_rays_per_batch=1024)
         self.image_coords = self.cameras.get_image_coords()
         self.joint_pos_filenames = dataparser_outputs.metadata["joint_pos_filenames"]

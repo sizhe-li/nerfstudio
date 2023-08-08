@@ -199,29 +199,37 @@ class KPlanesModel(Model):
         # TODO: remove hard-coding
         self.n_joints = 4
 
-        pos_freq_emb = PosFreqEncoding(num_freqs=4, d_in=1)
+        # pos_freq_emb = PosFreqEncoding(num_freqs=4, d_in=1)
+        # preprocess_ops = [
+        #     Rearrange(
+        #         "batch (n d) -> batch n d",
+        #         n=self.n_joints,
+        #     ),
+        #     pos_freq_emb,
+        #     nn.Linear(pos_freq_emb.d_out, self.config.grid_feature_dim),
+        # ]
+
         preprocess_ops = [
             Rearrange(
-                "batch (n d) -> batch n d",
+                "batch () (n d) -> batch n d",
                 n=self.n_joints,
             ),
-            pos_freq_emb,
-            nn.Linear(pos_freq_emb.d_out, self.config.grid_feature_dim),
         ]
+        sample_code_dim = self.config.grid_feature_dim // self.n_joints
 
         self.joint_preprocess = nn.Sequential(*preprocess_ops)
         self.joint_idx_emb = nn.Parameter(
-            torch.randn((1, self.n_joints, self.config.grid_feature_dim))
+            torch.randn((1, self.n_joints, sample_code_dim))
         )
 
-        # self.sample_embedding = nn.Embedding(
-        #     self.n_samples, self.config.grid_feature_dim
-        # )
-        # torch.nn.init.normal_(
-        #     self.sample_embedding.weight,
-        #     mean=0.0,
-        #     std=0.01 / math.sqrt(self.config.grid_feature_dim),
-        # )
+        self.sample_embedding = nn.Embedding(
+            self.n_samples, sample_code_dim * self.n_joints
+        )
+        torch.nn.init.normal_(
+            self.sample_embedding.weight,
+            mean=0.0,
+            std=0.01 / math.sqrt(sample_code_dim * self.n_joints),
+        )
 
         # Fields
         self.field = KPlanesField(
@@ -229,7 +237,7 @@ class KPlanesModel(Model):
             num_images=self.num_train_data,
             grid_base_resolution=self.config.grid_base_resolution,
             grid_feature_dim=self.config.grid_feature_dim,
-            sample_code_dim=self.config.grid_feature_dim,
+            sample_code_dim=sample_code_dim,
             concat_across_scales=self.config.concat_features_across_scales,
             multiscale_res=self.config.multiscale_res,
             spatial_distortion=scene_contraction,
@@ -274,7 +282,7 @@ class KPlanesModel(Model):
                     self.scene_box.aabb,
                     spatial_distortion=scene_contraction,
                     linear_decoder=self.config.linear_decoder,
-                    sample_code_dim=self.config.grid_feature_dim,
+                    sample_code_dim=sample_code_dim,
                     **prop_net_args,
                 )
                 self.proposal_networks.append(network)
@@ -290,7 +298,7 @@ class KPlanesModel(Model):
                         self.scene_box.aabb,
                         spatial_distortion=scene_contraction,
                         linear_decoder=self.config.linear_decoder,
-                        sample_code_dim=self.config.grid_feature_dim,
+                        sample_code_dim=sample_code_dim,
                         **prop_net_args,
                     )
                     self.proposal_networks.append(network)
@@ -352,9 +360,10 @@ class KPlanesModel(Model):
 
     def get_param_groups(self) -> Dict[str, List[Parameter]]:
         param_groups = {
-            "fields": list(self.field.parameters()) 
-            + list(self.joint_preprocess.parameters()) + [self.joint_idx_emb],
-            # "embeddings": list(self.sample_embedding.parameters()),
+            "fields": list(self.field.parameters())
+            + list(self.joint_preprocess.parameters())
+            + [self.joint_idx_emb],
+            "embeddings": list(self.sample_embedding.parameters()),
         }
         if not self.config.use_occupancy_grid:
             param_groups["proposal_networks"] = list(
@@ -423,10 +432,13 @@ class KPlanesModel(Model):
         return callbacks
 
     def get_outputs(self, ray_bundle: RayBundle):
-        # conditioning_codes = self.sample_embedding(ray_bundle.sample_inds)
-        joint_pos = ray_bundle.joint_pos
-        conditioning_codes = self.joint_preprocess(joint_pos)
+        conditioning_codes = self.sample_embedding(ray_bundle.sample_inds)
+        conditioning_codes = self.joint_preprocess(conditioning_codes)
         conditioning_codes = conditioning_codes + self.joint_idx_emb[:]
+
+        # joint_pos = ray_bundle.joint_pos
+        # conditioning_codes = self.joint_preprocess(joint_pos)
+        # conditioning_codes = conditioning_codes + self.joint_idx_emb[:]
 
         if not self.training:
             if "conditioning_codes" in ray_bundle.metadata:
@@ -464,7 +476,9 @@ class KPlanesModel(Model):
             )
 
             # ray_samples.metadata["conditioning_codes"] = conditioning_codes
-            field_outputs = self.field(ray_samples, conditioning_codes=conditioning_codes)
+            field_outputs = self.field(
+                ray_samples, conditioning_codes=conditioning_codes
+            )
 
             ray_indices = torch.arange(num_rays, device=ray_bundle.origins.device)
             ray_indices = torch.repeat_interleave(ray_indices, ray_samples.shape[1])
@@ -511,7 +525,7 @@ class KPlanesModel(Model):
         outputs = {
             "rgb": rgb,
             "depth": depth,
-            "weights": (weights,),
+            # "weights": (weights,),
             # "steps": (steps, )
             # "ndf_features": (ndf_features, )
         }
