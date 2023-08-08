@@ -577,8 +577,8 @@ method_configs['autodecode-kplane'] = TrainerConfig(
                 dataparser=DNeRFDataParserConfig(center_method="focus", scale_factor=1.0),
                 # train_num_images_to_sample_from=-1,
                 # eval_num_images_to_sample_from=-1,
-                train_num_images_to_sample_from=250,
-                eval_num_images_to_sample_from=250,
+                train_num_images_to_sample_from=5000,
+                eval_num_images_to_sample_from=5000,
                 train_num_times_to_repeat_images=10000,
                 eval_num_times_to_repeat_images=10000,
                 train_num_rays_per_batch=512,
@@ -591,7 +591,7 @@ method_configs['autodecode-kplane'] = TrainerConfig(
             model=DepthAutoDecodeKPlanesModelConfig(
                 eval_num_rays_per_chunk=1 << 15,
                 num_samples=64,
-                num_proposal_samples=(256, 128),
+                num_proposal_samples=(256, 256),
                 background_color="white",
 
                 grid_base_resolution=[128, 128, 128],  # time-resolution should be half the time-steps
@@ -621,7 +621,7 @@ method_configs['autodecode-kplane'] = TrainerConfig(
                 "scheduler": CosineDecaySchedulerConfig(warm_up_end=512, max_steps=300000),
             },
             "embeddings": {
-                "optimizer": AdamOptimizerConfig(lr=5e-3, eps=1e-15, weight_decay=1e-4),
+                "optimizer": AdamOptimizerConfig(lr=5e-4, eps=1e-15, weight_decay=1e-3),
                 "scheduler": CosineDecaySchedulerConfig(warm_up_end=512, max_steps=300000),
             },
         },

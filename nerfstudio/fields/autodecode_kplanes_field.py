@@ -192,7 +192,7 @@ class KPlanesField(Field):
         self.decoder = Transformer(
             dim=self.feature_dim,
             depth=2,
-            heads=4,
+            heads=8,
             dim_head=16,
             mlp_dim=32,
             selfatt=False,
@@ -316,16 +316,6 @@ class KPlanesField(Field):
             positions = (
                 SceneBox.get_normalized_positions(positions, self.aabb) * 2.0 - 1.0
             )
-
-        if self.has_time_planes:
-            assert (
-                ray_samples.times is not None
-            ), "Initialized model with time-planes, but no time data is given"
-            # Normalize timestamps from [0, 1] to [-1, 1]
-            timestamps = ray_samples.times * 2.0 - 1.0
-            positions = torch.cat(
-                (positions, timestamps), dim=-1
-            )  # [n_rays, n_samples, 4]
 
         # positions_flat = positions.view(-1, positions.shape[-1])
         grid_features = interpolate_ms_features(
@@ -476,9 +466,13 @@ class KPlanesField(Field):
         """
         if compute_normals:
             with torch.enable_grad():
-                density, density_embedding = self.get_density(ray_samples, conditioning_codes=conditioning_codes)
+                density, density_embedding = self.get_density(
+                    ray_samples, conditioning_codes=conditioning_codes
+                )
         else:
-            density, density_embedding = self.get_density(ray_samples, conditioning_codes=conditioning_codes)
+            density, density_embedding = self.get_density(
+                ray_samples, conditioning_codes=conditioning_codes
+            )
 
         field_outputs = self.get_outputs(
             ray_samples, density_embedding=density_embedding
@@ -528,7 +522,7 @@ class KPlanesDensityField(Field):
         self.decoder = Transformer(
             dim=self.feature_dim,
             depth=2,
-            heads=4,
+            heads=8,
             dim_head=16,
             mlp_dim=32,
             selfatt=False,
@@ -587,16 +581,6 @@ class KPlanesDensityField(Field):
             positions = (
                 SceneBox.get_normalized_positions(positions, self.aabb) * 2.0 - 1.0
             )
-
-        if self.has_time_planes:
-            assert (
-                ray_samples.times is not None
-            ), "Initialized model with time-planes, but no time data is given"
-            # Normalize timestamps from [0, 1] to [-1, 1]
-            timestamps = ray_samples.times * 2.0 - 1.0
-            positions = torch.cat(
-                (positions, timestamps), dim=-1
-            )  # [n_rays, n_samples, 4]
 
         grid_features = interpolate_ms_features(
             positions, grid_encodings=[self.grids], concat_features=False
