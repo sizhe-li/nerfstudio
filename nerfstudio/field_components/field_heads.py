@@ -20,9 +20,8 @@ from typing import Callable, Optional, Union
 
 import torch
 from jaxtyping import Float, Shaped
-from torch import Tensor, nn
-
 from nerfstudio.field_components.base_field_component import FieldComponent
+from torch import Tensor, nn
 
 
 class FieldHeadNames(Enum):
@@ -41,6 +40,7 @@ class FieldHeadNames(Enum):
     SDF = "sdf"
     ALPHA = "alpha"
     GRADIENT = "gradient"
+    FEATURE = "feature"
 
 
 class FieldHead(FieldComponent):

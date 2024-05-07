@@ -15,6 +15,8 @@
 """
 Ray generator.
 """
+from typing import Optional
+
 from jaxtyping import Int
 from torch import Tensor, nn
 
@@ -35,9 +37,15 @@ class RayGenerator(nn.Module):
     def __init__(self, cameras: Cameras) -> None:
         super().__init__()
         self.cameras = cameras
-        self.register_buffer("image_coords", cameras.get_image_coords(), persistent=False)
+        self.register_buffer(
+            "image_coords", cameras.get_image_coords(), persistent=False
+        )
 
-    def forward(self, ray_indices: Int[Tensor, "num_rays 3"]) -> RayBundle:
+    def forward(
+        self,
+        ray_indices: Int[Tensor, "num_rays 3"],
+        times: Optional[Int[Tensor, "num_rays 1"]] = None,
+    ) -> RayBundle:
         """Index into the cameras to generate the rays.
 
         Args:
@@ -51,5 +59,6 @@ class RayGenerator(nn.Module):
         ray_bundle = self.cameras.generate_rays(
             camera_indices=c.unsqueeze(-1),
             coords=coords,
+            times=times,
         )
         return ray_bundle

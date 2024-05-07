@@ -31,6 +31,7 @@ from nerfstudio.cameras.camera_optimizers import CameraOptimizer
 from nerfstudio.cameras.cameras import CameraType
 from nerfstudio.configs import base_config as cfg
 from nerfstudio.data.datasets.base_dataset import InputDataset
+from nerfstudio.data.datasets.dynamic_dataset import DynamicDataset
 from nerfstudio.models.base_model import Model
 from nerfstudio.models.splatfacto import SplatfactoModel
 from nerfstudio.pipelines.base_pipeline import Pipeline
@@ -92,7 +93,9 @@ class Viewer:
         self.include_time = self.pipeline.datamanager.includes_time
 
         if self.config.websocket_port is None:
-            websocket_port = viewer_utils.get_free_port(default_port=self.config.websocket_port_default)
+            websocket_port = viewer_utils.get_free_port(
+                default_port=self.config.websocket_port_default
+            )
         else:
             websocket_port = self.config.websocket_port
         self.log_filename.parent.mkdir(exist_ok=True)
@@ -105,7 +108,9 @@ class Viewer:
         self._prev_train_state: Literal["training", "paused", "completed"] = "training"
         self.last_move_time = 0
 
-        self.viser_server = viser.ViserServer(host=config.websocket_host, port=websocket_port)
+        self.viser_server = viser.ViserServer(
+            host=config.websocket_host, port=websocket_port
+        )
         # Set the name of the URL either to the share link if available, or the localhost
         share_url = None
         if share:
@@ -114,15 +119,21 @@ class Viewer:
                 print("Couldn't make share URL!")
 
         if share_url is not None:
-            self.viewer_info = [f"Viewer at: http://localhost:{websocket_port} or {share_url}"]
+            self.viewer_info = [
+                f"Viewer at: http://localhost:{websocket_port} or {share_url}"
+            ]
         elif config.websocket_host == "0.0.0.0":
             # 0.0.0.0 is not a real IP address and was confusing people, so
             # we'll just print localhost instead. There are some security
             # (and IPv6 compatibility) implications here though, so we should
             # note that the server is bound to 0.0.0.0!
-            self.viewer_info = [f"Viewer running locally at: http://localhost:{websocket_port} (listening on 0.0.0.0)"]
+            self.viewer_info = [
+                f"Viewer running locally at: http://localhost:{websocket_port} (listening on 0.0.0.0)"
+            ]
         else:
-            self.viewer_info = [f"Viewer running locally at: http://{config.websocket_host}:{websocket_port}"]
+            self.viewer_info = [
+                f"Viewer running locally at: http://{config.websocket_host}:{websocket_port}"
+            ]
 
         buttons = (
             viser.theme.TitlebarButton(
@@ -204,17 +215,24 @@ class Viewer:
             )
 
         with tabs.add_tab("Export", viser.Icon.PACKAGE_EXPORT):
-            populate_export_tab(self.viser_server, self.control_panel, config_path, self.pipeline.model)
+            populate_export_tab(
+                self.viser_server, self.control_panel, config_path, self.pipeline.model
+            )
 
         # Keep track of the pointers to generated GUI folders, because each generated folder holds a unique ID.
         viewer_gui_folders = dict()
 
-        def nested_folder_install(folder_labels: List[str], prev_labels: List[str], element: ViewerElement):
+        def nested_folder_install(
+            folder_labels: List[str], prev_labels: List[str], element: ViewerElement
+        ):
             if len(folder_labels) == 0:
                 element.install(self.viser_server)
                 # also rewire the hook to rerender
                 prev_cb = element.cb_hook
-                element.cb_hook = lambda element: [prev_cb(element), self._trigger_rerender()]
+                element.cb_hook = lambda element: [
+                    prev_cb(element),
+                    self._trigger_rerender(),
+                ]
             else:
                 # recursively create folders
                 # If the folder name is "Custom Elements/a/b", then:
@@ -230,12 +248,18 @@ class Viewer:
                 # Otherwise, use the existing folder as context manager.
                 folder_path = "/".join(prev_labels + [folder_labels[0]])
                 if folder_path not in viewer_gui_folders:
-                    viewer_gui_folders[folder_path] = self.viser_server.add_gui_folder(folder_labels[0])
+                    viewer_gui_folders[folder_path] = self.viser_server.add_gui_folder(
+                        folder_labels[0]
+                    )
                 with viewer_gui_folders[folder_path]:
-                    nested_folder_install(folder_labels[1:], prev_labels + [folder_labels[0]], element)
+                    nested_folder_install(
+                        folder_labels[1:], prev_labels + [folder_labels[0]], element
+                    )
 
         with control_tab:
-            from nerfstudio.viewer_legacy.server.viewer_elements import ViewerElement as LegacyViewerElement
+            from nerfstudio.viewer_legacy.server.viewer_elements import (
+                ViewerElement as LegacyViewerElement,
+            )
 
             if len(parse_object(pipeline, LegacyViewerElement, "Custom Elements")) > 0:
                 from nerfstudio.utils.rich_utils import CONSOLE
@@ -245,7 +269,9 @@ class Viewer:
                     style="bold yellow",
                 )
             self.viewer_elements = []
-            self.viewer_elements.extend(parse_object(pipeline, ViewerElement, "Custom Elements"))
+            self.viewer_elements.extend(
+                parse_object(pipeline, ViewerElement, "Custom Elements")
+            )
             for param_path, element in self.viewer_elements:
                 folder_labels = param_path.split("/")[:-1]
                 nested_folder_install(folder_labels, [], element)
@@ -262,7 +288,8 @@ class Viewer:
         if isinstance(pipeline.model, SplatfactoModel):
             self.viser_server.add_point_cloud(
                 "/gaussian_splatting_initial_points",
-                points=pipeline.model.means.numpy(force=True) * VISER_NERFSTUDIO_SCALE_RATIO,
+                points=pipeline.model.means.numpy(force=True)
+                * VISER_NERFSTUDIO_SCALE_RATIO,
                 colors=(255, 0, 0),
                 point_size=0.01,
                 point_shape="circle",
@@ -297,7 +324,10 @@ class Viewer:
         R = vtf.SO3(wxyz=client.camera.wxyz)
         R = R @ vtf.SO3.from_x_radians(np.pi)
         R = torch.tensor(R.as_matrix())
-        pos = torch.tensor(client.camera.position, dtype=torch.float64) / VISER_NERFSTUDIO_SCALE_RATIO
+        pos = (
+            torch.tensor(client.camera.position, dtype=torch.float64)
+            / VISER_NERFSTUDIO_SCALE_RATIO
+        )
         c2w = torch.concatenate([R, pos[:, None]], dim=1)
         if self.ready and self.render_tab_state.preview_render:
             camera_type = self.render_tab_state.preview_camera_type
@@ -306,13 +336,19 @@ class Viewer:
                 aspect=self.render_tab_state.preview_aspect,
                 c2w=c2w,
                 time=self.render_tab_state.preview_time,
-                camera_type=CameraType.PERSPECTIVE
-                if camera_type == "Perspective"
-                else CameraType.FISHEYE
-                if camera_type == "Fisheye"
-                else CameraType.EQUIRECTANGULAR
-                if camera_type == "Equirectangular"
-                else assert_never(camera_type),
+                camera_type=(
+                    CameraType.PERSPECTIVE
+                    if camera_type == "Perspective"
+                    else (
+                        CameraType.FISHEYE
+                        if camera_type == "Fisheye"
+                        else (
+                            CameraType.EQUIRECTANGULAR
+                            if camera_type == "Equirectangular"
+                            else assert_never(camera_type)
+                        )
+                    )
+                ),
             )
         else:
             camera_state = CameraState(
@@ -328,7 +364,9 @@ class Viewer:
         self.render_statemachines.pop(client.client_id)
 
     def handle_new_client(self, client: viser.ClientHandle) -> None:
-        self.render_statemachines[client.client_id] = RenderStateMachine(self, VISER_NERFSTUDIO_SCALE_RATIO, client)
+        self.render_statemachines[client.client_id] = RenderStateMachine(
+            self, VISER_NERFSTUDIO_SCALE_RATIO, client
+        )
         self.render_statemachines[client.client_id].start()
 
         @client.camera.on_update
@@ -338,7 +376,9 @@ class Viewer:
             self.last_move_time = time.time()
             with self.viser_server.atomic():
                 camera_state = self.get_camera_state(client)
-                self.render_statemachines[client.client_id].action(RenderAction("move", camera_state))
+                self.render_statemachines[client.client_id].action(
+                    RenderAction("move", camera_state)
+                )
 
     def set_camera_visibility(self, visible: bool) -> None:
         """Toggle the visibility of the training cameras."""
@@ -359,15 +399,23 @@ class Viewer:
         idxs = list(self.camera_handles.keys())
         with torch.no_grad():
             assert isinstance(camera_optimizer, CameraOptimizer)
-            c2ws_delta = camera_optimizer(torch.tensor(idxs, device=camera_optimizer.device)).cpu().numpy()
+            c2ws_delta = (
+                camera_optimizer(torch.tensor(idxs, device=camera_optimizer.device))
+                .cpu()
+                .numpy()
+            )
         for i, key in enumerate(idxs):
             # both are numpy arrays
             c2w_orig = self.original_c2w[key]
             c2w_delta = c2ws_delta[i, ...]
-            c2w = c2w_orig @ np.concatenate((c2w_delta, np.array([[0, 0, 0, 1]])), axis=0)
+            c2w = c2w_orig @ np.concatenate(
+                (c2w_delta, np.array([[0, 0, 0, 1]])), axis=0
+            )
             R = vtf.SO3.from_matrix(c2w[:3, :3])  # type: ignore
             R = R @ vtf.SO3.from_x_radians(np.pi)
-            self.camera_handles[key].position = c2w[:3, 3] * VISER_NERFSTUDIO_SCALE_RATIO
+            self.camera_handles[key].position = (
+                c2w[:3, 3] * VISER_NERFSTUDIO_SCALE_RATIO
+            )
             self.camera_handles[key].wxyz = R.wxyz
 
     def _trigger_rerender(self) -> None:
@@ -407,7 +455,9 @@ class Viewer:
         else:
             num_display_images = min(self.config.max_num_display_images, total_num)
         # draw indices, roughly evenly spaced
-        return np.linspace(0, total_num - 1, num_display_images, dtype=np.int32).tolist()
+        return np.linspace(
+            0, total_num - 1, num_display_images, dtype=np.int32
+        ).tolist()
 
     def init_scene(
         self,
@@ -426,8 +476,15 @@ class Viewer:
         self.original_c2w: Dict[int, np.ndarray] = {}
         image_indices = self._pick_drawn_image_idxs(len(train_dataset))
         for idx in image_indices:
+            if isinstance(train_dataset, DynamicDataset):
+                camera_idx = train_dataset._dataparser_outputs.sample_to_camera_idx[
+                    idx
+                ].item()
+            else:
+                camera_idx = idx
+
             image = train_dataset[idx]["image"]
-            camera = train_dataset.cameras[idx]
+            camera = train_dataset.cameras[camera_idx]
             image_uint8 = (image * 255).detach().type(torch.uint8)
             image_uint8 = image_uint8.permute(2, 0, 1)
 
@@ -451,7 +508,9 @@ class Viewer:
             )
 
             @camera_handle.on_click
-            def _(event: viser.SceneNodePointerEvent[viser.CameraFrustumHandle]) -> None:
+            def _(
+                event: viser.SceneNodePointerEvent[viser.CameraFrustumHandle],
+            ) -> None:
                 with event.client.atomic():
                     event.client.camera.position = event.target.position
                     event.client.camera.wxyz = event.target.wxyz
@@ -476,12 +535,18 @@ class Viewer:
         # this stops training while moving to make the response smoother
         while time.time() - self.last_move_time < 0.1:
             time.sleep(0.05)
-        if self.trainer is not None and self.trainer.training_state == "training" and self.train_util != 1:
+        if (
+            self.trainer is not None
+            and self.trainer.training_state == "training"
+            and self.train_util != 1
+        ):
             if (
                 EventName.TRAIN_RAYS_PER_SEC.value in GLOBAL_BUFFER["events"]
                 and EventName.VIS_RAYS_PER_SEC.value in GLOBAL_BUFFER["events"]
             ):
-                train_s = GLOBAL_BUFFER["events"][EventName.TRAIN_RAYS_PER_SEC.value]["avg"]
+                train_s = GLOBAL_BUFFER["events"][EventName.TRAIN_RAYS_PER_SEC.value][
+                    "avg"
+                ]
                 vis_s = GLOBAL_BUFFER["events"][EventName.VIS_RAYS_PER_SEC.value]["avg"]
                 train_util = self.train_util
                 vis_n = self.control_panel.max_res**2
@@ -489,7 +554,9 @@ class Viewer:
                 train_time = train_n / train_s
                 vis_time = vis_n / vis_s
 
-                render_freq = train_util * vis_time / (train_time - train_util * train_time)
+                render_freq = (
+                    train_util * vis_time / (train_time - train_util * train_time)
+                )
             else:
                 render_freq = 30
             if step > self.last_step + render_freq:
@@ -498,7 +565,9 @@ class Viewer:
                 for id in clients:
                     camera_state = self.get_camera_state(clients[id])
                     if camera_state is not None:
-                        self.render_statemachines[id].action(RenderAction("step", camera_state))
+                        self.render_statemachines[id].action(
+                            RenderAction("step", camera_state)
+                        )
                 self.update_camera_poses()
                 self.update_step(step)
 

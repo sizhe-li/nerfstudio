@@ -25,17 +25,23 @@ import numpy as np
 import torch
 from nerfstudio.cameras.rays import RayBundle
 from nerfstudio.model_components import losses
-from nerfstudio.model_components.losses import (DepthLossType, depth_loss,
-                                                depth_ranking_loss)
-from nerfstudio.models.nerfacto import NerfactoModel, NerfactoModelConfig
+from nerfstudio.model_components.losses import (
+    DepthLossType,
+    depth_loss,
+    depth_ranking_loss,
+)
+from nerfstudio.models.feature_nerfacto import (
+    FeatureNerfactoModel,
+    FeatureNerfactoModelConfig,
+)
 from nerfstudio.utils import colormaps
 
 
 @dataclass
-class DepthNerfactoModelConfig(NerfactoModelConfig):
+class FeatureDepthNerfactoModelConfig(FeatureNerfactoModelConfig):
     """Additional parameters for depth supervision."""
 
-    _target: Type = field(default_factory=lambda: DepthNerfactoModel)
+    _target: Type = field(default_factory=lambda: FeatureDepthNerfactoModel)
     depth_loss_mult: float = 1e-3
     """Lambda of the depth loss."""
     is_euclidean_depth: bool = False
@@ -50,16 +56,18 @@ class DepthNerfactoModelConfig(NerfactoModelConfig):
     """Rate of exponential decay."""
     depth_loss_type: DepthLossType = DepthLossType.DS_NERF
     """Depth loss type."""
+    feature_loss_mult: float = 1e-3
+    """Lambda of the feature loss."""
 
 
-class DepthNerfactoModel(NerfactoModel):
+class FeatureDepthNerfactoModel(FeatureNerfactoModel):
     """Depth loss augmented nerfacto model.
 
     Args:
         config: Nerfacto configuration to instantiate model
     """
 
-    config: DepthNerfactoModelConfig
+    config: FeatureDepthNerfactoModelConfig
 
     def populate_modules(self):
         """Set the fields and modules."""
@@ -81,12 +89,16 @@ class DepthNerfactoModel(NerfactoModel):
         if self.training:
             if (
                 losses.FORCE_PSEUDODEPTH_LOSS
-                and self.config.depth_loss_type not in losses.PSEUDODEPTH_COMPATIBLE_LOSSES
+                and self.config.depth_loss_type
+                not in losses.PSEUDODEPTH_COMPATIBLE_LOSSES
             ):
                 raise ValueError(
                     f"Forcing pseudodepth loss, but depth loss type ({self.config.depth_loss_type}) must be one of {losses.PSEUDODEPTH_COMPATIBLE_LOSSES}"
                 )
-            if self.config.depth_loss_type in (DepthLossType.DS_NERF, DepthLossType.URF):
+            if self.config.depth_loss_type in (
+                DepthLossType.DS_NERF,
+                DepthLossType.URF,
+            ):
                 metrics_dict["depth_loss"] = 0.0
                 sigma = self._get_sigma().to(self.device)
                 termination_depth = batch["depth_image"].to(self.device)
@@ -106,14 +118,22 @@ class DepthNerfactoModel(NerfactoModel):
                     outputs["expected_depth"], batch["depth_image"].to(self.device)
                 )
             else:
-                raise NotImplementedError(f"Unknown depth loss type {self.config.depth_loss_type}")
+                raise NotImplementedError(
+                    f"Unknown depth loss type {self.config.depth_loss_type}"
+                )
+
+        ### add feature head loss
+        feature_gt = batch["feature_gt"].to(self.device)
+        metrics_dict["feature_loss"] = self.rgb_loss(feature_gt, outputs["feature"])
 
         return metrics_dict
 
     def get_loss_dict(self, outputs, batch, metrics_dict=None):
         loss_dict = super().get_loss_dict(outputs, batch, metrics_dict)
         if self.training:
-            assert metrics_dict is not None and ("depth_loss" in metrics_dict or "depth_ranking" in metrics_dict)
+            assert metrics_dict is not None and (
+                "depth_loss" in metrics_dict or "depth_ranking" in metrics_dict
+            )
             if "depth_ranking" in metrics_dict:
                 loss_dict["depth_ranking"] = (
                     self.config.depth_loss_mult
@@ -121,7 +141,14 @@ class DepthNerfactoModel(NerfactoModel):
                     * metrics_dict["depth_ranking"]
                 )
             if "depth_loss" in metrics_dict:
-                loss_dict["depth_loss"] = self.config.depth_loss_mult * metrics_dict["depth_loss"]
+                loss_dict["depth_loss"] = (
+                    self.config.depth_loss_mult * metrics_dict["depth_loss"]
+                )
+            if "feature_loss" in metrics_dict:
+                loss_dict["feature_loss"] = (
+                    metrics_dict["feature_loss"] * self.config.feature_loss_mult
+                )
+
         return loss_dict
 
     def get_image_metrics_and_images(
@@ -140,10 +167,14 @@ class DepthNerfactoModel(NerfactoModel):
             near_plane=float(torch.min(ground_truth_depth).cpu()),
             far_plane=float(torch.max(ground_truth_depth).cpu()),
         )
-        images["depth"] = torch.cat([ground_truth_depth_colormap, predicted_depth_colormap], dim=1)
+        images["depth"] = torch.cat(
+            [ground_truth_depth_colormap, predicted_depth_colormap], dim=1
+        )
         depth_mask = ground_truth_depth > 0
         metrics["depth_mse"] = float(
-            torch.nn.functional.mse_loss(outputs["depth"][depth_mask], ground_truth_depth[depth_mask]).cpu()
+            torch.nn.functional.mse_loss(
+                outputs["depth"][depth_mask], ground_truth_depth[depth_mask]
+            ).cpu()
         )
         return metrics, images
 
@@ -152,6 +183,7 @@ class DepthNerfactoModel(NerfactoModel):
             return self.depth_sigma
 
         self.depth_sigma = torch.maximum(
-            self.config.sigma_decay_rate * self.depth_sigma, torch.tensor([self.config.depth_sigma])
+            self.config.sigma_decay_rate * self.depth_sigma,
+            torch.tensor([self.config.depth_sigma]),
         )
         return self.depth_sigma

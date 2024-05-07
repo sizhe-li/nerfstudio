@@ -21,11 +21,10 @@ from dataclasses import dataclass
 from typing import Any, Dict, List, Optional, Type
 
 import torch
-from torch.cuda.amp.grad_scaler import GradScaler
-from torch.nn.parameter import Parameter
-
 from nerfstudio.configs import base_config
 from nerfstudio.utils import writer
+from torch.cuda.amp.grad_scaler import GradScaler
+from torch.nn.parameter import Parameter
 
 
 # Optimizer related configs
@@ -78,7 +77,9 @@ class Optimizers:
         param_groups: A dictionary of parameter groups to optimize.
     """
 
-    def __init__(self, config: Dict[str, Any], param_groups: Dict[str, List[Parameter]]) -> None:
+    def __init__(
+        self, config: Dict[str, Any], param_groups: Dict[str, List[Parameter]]
+    ) -> None:
         self.config = config
         self.optimizers = {}
         self.schedulers = {}
@@ -96,7 +97,9 @@ class Optimizers:
 
                 config["camera_opt"] = {
                     "optimizer": AdamOptimizerConfig(lr=1e-3, eps=1e-15),
-                    "scheduler": ExponentialDecaySchedulerConfig(lr_final=1e-4, max_steps=30000),
+                    "scheduler": ExponentialDecaySchedulerConfig(
+                        lr_final=1e-4, max_steps=30000
+                    ),
                 }
             # Print some nice warning messages if the user forgot to specify an optimizer
             if param_group_name not in config:
@@ -104,13 +107,17 @@ class Optimizers:
                     f"""Optimizer config for '{param_group_name}' not found in config file. Make sure you specify an optimizer for each parameter group. Provided configs were: {config.keys()}"""
                 )
             lr_init = config[param_group_name]["optimizer"].lr
-            self.optimizers[param_group_name] = config[param_group_name]["optimizer"].setup(params=params)
+            self.optimizers[param_group_name] = config[param_group_name][
+                "optimizer"
+            ].setup(params=params)
             self.parameters[param_group_name] = params
             if config[param_group_name]["scheduler"]:
                 self.schedulers[param_group_name] = (
                     config[param_group_name]["scheduler"]
                     .setup()
-                    .get_scheduler(optimizer=self.optimizers[param_group_name], lr_init=lr_init)
+                    .get_scheduler(
+                        optimizer=self.optimizers[param_group_name], lr_init=lr_init
+                    )
                 )
 
     def optimizer_step(self, param_group_name: str) -> None:
@@ -152,10 +159,15 @@ class Optimizers:
             if max_norm is not None:
                 grad_scaler.unscale_(optimizer)
                 torch.nn.utils.clip_grad_norm_(self.parameters[param_group], max_norm)
-            if any(any(p.grad is not None for p in g["params"]) for g in optimizer.param_groups):
+            if any(
+                any(p.grad is not None for p in g["params"])
+                for g in optimizer.param_groups
+            ):
                 grad_scaler.step(optimizer)
 
-    def optimizer_scaler_step_some(self, grad_scaler: GradScaler, param_groups: List[str]) -> None:
+    def optimizer_scaler_step_some(
+        self, grad_scaler: GradScaler, param_groups: List[str]
+    ) -> None:
         """Take an optimizer step using a grad scaler ONLY on the specified param groups.
 
         Args:
@@ -167,7 +179,10 @@ class Optimizers:
             if max_norm is not None:
                 grad_scaler.unscale_(optimizer)
                 torch.nn.utils.clip_grad_norm_(self.parameters[param_group], max_norm)
-            if any(any(p.grad is not None for p in g["params"]) for g in optimizer.param_groups):
+            if any(
+                any(p.grad is not None for p in g["params"])
+                for g in optimizer.param_groups
+            ):
                 grad_scaler.step(optimizer)
 
     def optimizer_step_all(self) -> None:
@@ -189,7 +204,9 @@ class Optimizers:
             scheduler.step()
             # TODO(ethan): clean this up. why is there indexing into a list?
             lr = scheduler.get_last_lr()[0]
-            writer.put_scalar(name=f"learning_rate/{param_group_name}", scalar=lr, step=step)
+            writer.put_scalar(
+                name=f"learning_rate/{param_group_name}", scalar=lr, step=step
+            )
 
     def load_optimizers(self, loaded_state: Dict[str, Any]) -> None:
         """Helper to load the optimizer state from previous checkpoint
@@ -197,8 +214,8 @@ class Optimizers:
         Args:
             loaded_state: the state from the previous checkpoint
         """
-        for k, v in loaded_state.items():
-            self.optimizers[k].load_state_dict(v)
+        # foR k, v in loaded_state.items():
+        #     self.optimizers[k].load_state_dict(v)
 
     def load_schedulers(self, loaded_state: Dict[str, Any]) -> None:
         """Helper to load the scheduler state from previous checkpoint
