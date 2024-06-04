@@ -26,50 +26,53 @@ import tyro
 from nerfstudio.cameras.camera_optimizers import CameraOptimizerConfig
 from nerfstudio.configs.base_config import ViewerConfig
 from nerfstudio.configs.external_methods import (
-    ExternalMethodDummyTrainerConfig, get_external_methods)
+    ExternalMethodDummyTrainerConfig,
+    get_external_methods,
+)
 from nerfstudio.data.datamanagers.base_datamanager import (
-    VanillaDataManager, VanillaDataManagerConfig)
+    VanillaDataManager,
+    VanillaDataManagerConfig,
+)
 from nerfstudio.data.datamanagers.dnerf_datamanager import DNeRFDataManager
-from nerfstudio.data.datamanagers.full_images_datamanager import \
-    FullImageDatamanagerConfig
-from nerfstudio.data.datamanagers.parallel_datamanager import \
-    ParallelDataManagerConfig
-from nerfstudio.data.datamanagers.random_cameras_datamanager import \
-    RandomCamerasDataManagerConfig
-from nerfstudio.data.dataparsers.blender_dataparser import \
-    BlenderDataParserConfig
+from nerfstudio.data.datamanagers.full_images_datamanager import (
+    FullImageDatamanagerConfig,
+)
+from nerfstudio.data.datamanagers.parallel_datamanager import ParallelDataManagerConfig
+from nerfstudio.data.datamanagers.random_cameras_datamanager import (
+    RandomCamerasDataManagerConfig,
+)
+from nerfstudio.data.dataparsers.blender_dataparser import BlenderDataParserConfig
 from nerfstudio.data.dataparsers.dnerf_dataparser import DNeRFDataParserConfig
-from nerfstudio.data.dataparsers.feature_field_dataparser import \
-    FeatureNerfstudioDataParserConfig
-from nerfstudio.data.dataparsers.instant_ngp_dataparser import \
-    InstantNGPDataParserConfig
-from nerfstudio.data.dataparsers.nerfstudio_dataparser import \
-    NerfstudioDataParserConfig
-from nerfstudio.data.dataparsers.phototourism_dataparser import \
-    PhototourismDataParserConfig
-from nerfstudio.data.dataparsers.sdfstudio_dataparser import \
-    SDFStudioDataParserConfig
-from nerfstudio.data.dataparsers.sitcoms3d_dataparser import \
-    Sitcoms3DDataParserConfig
+from nerfstudio.data.dataparsers.feature_field_dataparser import (
+    FeatureNerfstudioDataParserConfig,
+)
+from nerfstudio.data.dataparsers.instant_ngp_dataparser import (
+    InstantNGPDataParserConfig,
+)
+from nerfstudio.data.dataparsers.nerfstudio_dataparser import NerfstudioDataParserConfig
+from nerfstudio.data.dataparsers.phototourism_dataparser import (
+    PhototourismDataParserConfig,
+)
+from nerfstudio.data.dataparsers.sdfstudio_dataparser import SDFStudioDataParserConfig
+from nerfstudio.data.dataparsers.sitcoms3d_dataparser import Sitcoms3DDataParserConfig
 from nerfstudio.data.datasets.depth_dataset import DepthDataset
 from nerfstudio.data.datasets.dynamic_dataset import DynamicDepthFeatureDataset
 from nerfstudio.data.datasets.feature_depth_dataset import FeatureDepthDataset
 from nerfstudio.data.datasets.sdf_dataset import SDFDataset
 from nerfstudio.data.datasets.semantic_dataset import SemanticDataset
 from nerfstudio.data.pixel_samplers import PairPixelSamplerConfig
-from nerfstudio.engine.optimizers import (AdamOptimizerConfig,
-                                          RAdamOptimizerConfig)
-from nerfstudio.engine.schedulers import (CosineDecaySchedulerConfig,
-                                          ExponentialDecaySchedulerConfig,
-                                          MultiStepSchedulerConfig)
+from nerfstudio.engine.optimizers import AdamOptimizerConfig, RAdamOptimizerConfig
+from nerfstudio.engine.schedulers import (
+    CosineDecaySchedulerConfig,
+    ExponentialDecaySchedulerConfig,
+    MultiStepSchedulerConfig,
+)
 from nerfstudio.engine.trainer import TrainerConfig
-from nerfstudio.field_components.temporal_distortions import \
-    TemporalDistortionKind
+from nerfstudio.field_components.temporal_distortions import TemporalDistortionKind
 from nerfstudio.fields.sdf_field import SDFFieldConfig
 from nerfstudio.models.depth_kplanes import DepthKPlanesModelConfig
 from nerfstudio.models.depth_nerfacto import DepthNerfactoModelConfig
-from nerfstudio.models.feature_depth_nerfacto import \
-    FeatureDepthNerfactoModelConfig
+from nerfstudio.models.feature_depth_nerfacto import FeatureDepthNerfactoModelConfig
 from nerfstudio.models.generfacto import GenerfactoModelConfig
 from nerfstudio.models.instant_ngp import InstantNGPModelConfig
 from nerfstudio.models.mipnerf import MipNerfModel
@@ -263,15 +266,15 @@ method_configs["depth-nerfacto"] = TrainerConfig(
             _target=VanillaDataManager[DepthDataset],
             pixel_sampler=PairPixelSamplerConfig(),
             dataparser=NerfstudioDataParserConfig(),
-            train_num_rays_per_batch=4096,
-            eval_num_rays_per_batch=4096,
+            # train_num_rays_per_batch=4096,
+            # eval_num_rays_per_batch=4096,
         ),
         model=DepthNerfactoModelConfig(
             eval_num_rays_per_chunk=1 << 15,
             camera_optimizer=CameraOptimizerConfig(mode="SO3xR3"),
-            hidden_dim=128,
-            hidden_dim_color=128,
-            appearance_embed_dim=128,
+            # hidden_dim=128,
+            # hidden_dim_color=128,
+            # appearance_embed_dim=128,
         ),
     ),
     optimizers={
